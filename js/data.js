@@ -31,7 +31,7 @@ const MarketData = (() => {
     { t: 'BA',   name: 'Boeing',             sector: 'Industrials',   px: 182, vol: 0.023, drift:  0.0002 },
   ];
 
-  const BARS = 260;               // ~ one trading year of daily closes
+  const BARS = 320;               // enough history for the 200-day average
   const SEED_EPOCH = 20260704;    // fixed so every visit shows the same demo tape
 
   /* mulberry32 — small deterministic PRNG */
@@ -60,8 +60,9 @@ const MarketData = (() => {
     return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
   }
 
-  /* Generate a daily close series ending at roughly the anchor price,
-     with occasional regime shifts so RSI/MACD signals actually appear. */
+  /* Generate daily OHLCV: a close-to-close random walk with regime shifts,
+     then intraday structure (open gap, high/low shadows) and volume that
+     swells on big-move days. */
   function genSeries(spec) {
     const rand = rng(hash(spec.t) ^ SEED_EPOCH);
     const closes = [];
@@ -76,7 +77,22 @@ const MarketData = (() => {
     }
     // scale so the final price lands near (not exactly on) the anchor
     const scale = spec.px * (0.97 + rand() * 0.06) / closes[closes.length - 1];
-    return closes.map(c => +(c * scale).toFixed(2));
+    for (let i = 0; i < BARS; i++) closes[i] = +(closes[i] * scale).toFixed(2);
+
+    const opens = [], highs = [], lows = [], volumes = [];
+    const baseVol = 2e6 + (hash(spec.t + 'v') % 60) * 1e6;
+    for (let i = 0; i < BARS; i++) {
+      const prev = i === 0 ? closes[0] : closes[i - 1];
+      const o = +(prev * (1 + gauss(rand) * spec.vol * 0.35)).toFixed(2);
+      const hi = Math.max(o, closes[i]) * (1 + Math.abs(gauss(rand)) * spec.vol * 0.45);
+      const lo = Math.min(o, closes[i]) * (1 - Math.abs(gauss(rand)) * spec.vol * 0.45);
+      opens.push(o);
+      highs.push(+hi.toFixed(2));
+      lows.push(+lo.toFixed(2));
+      const move = Math.abs(closes[i] / prev - 1);
+      volumes.push(Math.round(baseVol * (0.6 + rand() * 0.8 + 6 * move / Math.max(spec.vol, 1e-6) * 0.25)));
+    }
+    return { opens, highs, lows, closes, volumes };
   }
 
   /* Trading-day dates ending today (skip weekends; holidays ignored for demo). */
@@ -94,22 +110,40 @@ const MarketData = (() => {
   const DATES = genDates(BARS);
 
   const STOCKS = UNIVERSE.map(spec => {
-    const closes = genSeries(spec);
+    const { opens, highs, lows, closes, volumes } = genSeries(spec);
+    const last = closes.length - 1;
+
     const r = Indicators.rsi(closes);
     const m = Indicators.macd(closes);
     const sma20 = Indicators.sma(closes, 20);
     const sma50 = Indicators.sma(closes, 50);
-    const last = closes.length - 1;
-    const hi52 = Math.max(...closes);
-    const lo52 = Math.min(...closes);
+    const sma200 = Indicators.sma(closes, 200);
+    const stoch = Indicators.stochastic(highs, lows, closes);
+    const bb = Indicators.bollinger(closes);
+    const adxData = Indicators.adx(highs, lows, closes);
+    const psarData = Indicators.psar(highs, lows);
+    const ichi = Indicators.ichimoku(highs, lows);
+    const obvSeries = Indicators.obv(closes, volumes);
+    const mfiSeries = Indicators.mfi(highs, lows, closes, volumes);
+    const willr = Indicators.williamsR(highs, lows, closes);
+    const cciSeries = Indicators.cci(highs, lows, closes);
+    const rocSeries = Indicators.roc(closes);
+    const atrSeries = Indicators.atr(highs, lows, closes);
+    const volAvg20 = Indicators.sma(volumes, 20);
+
+    const year = closes.slice(-252);
+    const hi52 = Math.max(...year);
+    const lo52 = Math.min(...year);
     const cross = Indicators.lastCross(m.macd, m.signal, 5);
 
-    return {
+    const stock = {
       ...spec,
-      closes,
+      opens, highs, lows, closes, volumes,
       rsiSeries: r,
       macdSeries: m,
-      sma20, sma50,
+      sma20, sma50, sma200,
+      stoch, bb, adxData, psarData, ichi,
+      obvSeries, mfiSeries, willr, cciSeries, rocSeries, atrSeries, volAvg20,
       price: closes[last],
       chg: (closes[last] / closes[last - 1] - 1) * 100,
       rsi: r[last],
@@ -122,9 +156,17 @@ const MarketData = (() => {
       uptrend: sma20[last] != null && sma50[last] != null &&
                closes[last] > sma20[last] && sma20[last] > sma50[last],
     };
+    stock.sig = Signals.evaluate(stock);
+    return stock;
   });
 
   const BY_TICKER = Object.fromEntries(STOCKS.map(s => [s.t, s]));
+
+  /* Which tickers each signal currently fires on (for the Learn library). */
+  const SIGNAL_EXAMPLES = {};
+  for (const s of STOCKS)
+    for (const f of s.sig.fired)
+      (SIGNAL_EXAMPLES[f.id] = SIGNAL_EXAMPLES[f.id] || []).push(s.t);
 
   /* ---------- market events ---------- */
   /* FOMC dates are the Fed's published 2026 schedule. CPI / jobs-report dates
@@ -188,6 +230,12 @@ const MarketData = (() => {
     'Dollar-cost averaging — buying a fixed amount on a schedule — removes the pressure of timing the market perfectly.',
     'The MACD histogram shrinking toward zero often warns of a momentum shift before the lines actually cross.',
     'Diversify across sectors: tech, healthcare, energy and consumer stocks often move on different news.',
+    'One candlestick pattern alone is weak evidence. Signals get powerful when they stack: a hammer AT support WITH oversold RSI is a real setup.',
+    'Volume is the lie detector. A breakout on huge volume means conviction; the same breakout on thin volume is often a head-fake.',
+    'The golden cross (50-day over 200-day) is slow by design — it trades being early for being sure the trend has actually turned.',
+    'Chart patterns only "count" once confirmed: a double bottom means little until price actually breaks above the middle peak.',
+    'Divergence — price making new lows while RSI doesn\'t — is one of the earliest reversal tells, but it can stay "wrong" for a while. Wait for a trigger.',
+    'A Bollinger squeeze tells you a big move is coming, not which way. Let the breakout pick the direction before you do.',
   ];
 
   const GLOSSARY = {
@@ -199,7 +247,11 @@ const MarketData = (() => {
       title: 'MACD — Moving Average Convergence Divergence',
       body: 'Follows momentum by comparing a fast (12-day) and slow (26-day) average of price. When the MACD line crosses above its 9-day signal line, momentum is turning up (bullish); crossing below is bearish. The histogram shows the gap between the two lines.'
     },
+    bias: {
+      title: 'Bias — composite signal score',
+      body: 'Every bull sign the screener detects adds to the score and every bear sign subtracts, weighted by importance (a golden cross counts more than a single candlestick). It\'s a quick "which way is the evidence leaning" summary — open the stock to see exactly which signals fired, and check the Learn tab for what each one means.'
+    },
   };
 
-  return { STOCKS, BY_TICKER, DATES, EVENTS, TIPS, GLOSSARY };
+  return { STOCKS, BY_TICKER, DATES, EVENTS, TIPS, GLOSSARY, SIGNAL_EXAMPLES };
 })();

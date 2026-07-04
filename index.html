@@ -20,6 +20,7 @@
     <button class="tab is-active" role="tab" aria-selected="true" data-view="screener">Screener</button>
     <button class="tab" role="tab" aria-selected="false" data-view="portfolio">Portfolio</button>
     <button class="tab" role="tab" aria-selected="false" data-view="events">Events</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="learn">Learn</button>
   </nav>
 
   <div class="topbar-actions">
@@ -53,8 +54,13 @@
         <button class="chip" data-preset="bullcross" title="MACD line just crossed above its signal line">Bullish MACD cross</button>
         <button class="chip" data-preset="bearcross" title="MACD line just crossed below its signal line">Bearish MACD cross</button>
         <button class="chip" data-preset="uptrend" title="Price above its 20- and 50-day averages">Uptrend</button>
+        <button class="chip" data-preset="bullbias" title="Composite score of all detected signals leans clearly bullish">Bullish bias</button>
+        <button class="chip" data-preset="bearbias" title="Composite score of all detected signals leans clearly bearish">Bearish bias</button>
       </div>
       <div class="toolbar-right">
+        <select id="signal-filter" class="select" aria-label="Filter by signal">
+          <option value="">Any signal…</option>
+        </select>
         <select id="sector-filter" class="select" aria-label="Filter by sector">
           <option value="">All sectors</option>
         </select>
@@ -76,7 +82,9 @@
             <th data-sort="macdState">
               MACD <button class="info-btn" data-term="macd" aria-label="What is MACD?">?</button>
             </th>
-            <th data-sort="off52" class="num col-52w">Off 52-w high</th>
+            <th data-sort="score" class="col-bias">
+              Bias <button class="info-btn" data-term="bias" aria-label="What is the bias score?">?</button>
+            </th>
             <th class="col-spark">30 days</th>
           </tr>
         </thead>
@@ -131,6 +139,29 @@
     </div>
   </section>
 
+  <!-- ============ LEARN ============ -->
+  <section class="view" id="view-learn">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Signal &amp; pattern library</h2>
+        <span class="panel-sub">every bull / bear sign this screener watches for</span>
+      </div>
+      <p class="panel-note">Each card explains one signal in plain English and shows which stocks it's firing on right now (demo data) — click a ticker to see it on the chart. Golden rule: no single signal is a trade. Signals stack; the more that agree, the stronger the case.</p>
+      <div class="toolbar">
+        <div class="presets" id="learn-side" role="group" aria-label="Filter signals by direction">
+          <button class="chip is-active" data-side="">All</button>
+          <button class="chip" data-side="bull">▲ Bullish</button>
+          <button class="chip" data-side="bear">▼ Bearish</button>
+          <button class="chip" data-side="neutral">◆ Context</button>
+        </div>
+        <div class="toolbar-right">
+          <input type="search" id="learn-search" class="search" placeholder="Search signals…" aria-label="Search signals">
+        </div>
+      </div>
+      <div id="learn-list"></div>
+    </div>
+  </section>
+
   <!-- ============ EVENTS ============ -->
   <section class="view" id="view-events">
     <div class="panel">
@@ -161,9 +192,15 @@
   </div>
   <div class="drawer-body">
     <div class="chart-block">
-      <div class="chart-title">Price <span class="chart-title-sub">6 months, daily close</span></div>
+      <div class="chart-title">Price <span class="chart-title-sub">3 months, daily candles + volume</span></div>
+      <div class="chart-legend">
+        <span class="legend-item"><span class="legend-swatch swatch-s1"></span>SMA 20</span>
+        <span class="legend-item"><span class="legend-swatch swatch-s2"></span>SMA 50</span>
+        <span class="legend-item"><span class="legend-swatch swatch-band"></span>Bollinger 20,2</span>
+      </div>
       <div id="chart-price" class="chart"></div>
     </div>
+    <div class="sig-block" id="drawer-signals"></div>
     <div class="chart-block">
       <div class="chart-title">RSI (14) <span class="chart-title-sub">above 70 = overbought · below 30 = oversold</span></div>
       <div id="chart-rsi" class="chart"></div>
@@ -176,6 +213,14 @@
         <span class="legend-item"><span class="legend-swatch swatch-hist"></span>Histogram</span>
       </div>
       <div id="chart-macd" class="chart"></div>
+    </div>
+    <div class="chart-block">
+      <div class="chart-title">Stochastic (14, 3, 3) <span class="chart-title-sub">above 80 = overbought · below 20 = oversold</span></div>
+      <div class="chart-legend">
+        <span class="legend-item"><span class="legend-swatch swatch-s1"></span>%K</span>
+        <span class="legend-item"><span class="legend-swatch swatch-s2"></span>%D</span>
+      </div>
+      <div id="chart-stoch" class="chart"></div>
     </div>
     <div class="read-block" id="drawer-read"></div>
   </div>
@@ -216,6 +261,7 @@
 <div class="popover" id="popover" hidden></div>
 
 <script src="js/indicators.js"></script>
+<script src="js/patterns.js"></script>
 <script src="js/data.js"></script>
 <script src="js/app.js"></script>
 </body>

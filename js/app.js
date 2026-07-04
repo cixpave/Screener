@@ -9,6 +9,7 @@
     (signed && n > 0 ? '+' : '') + n.toFixed(2) + '%';
   const arrow = n => (n >= 0 ? '▲' : '▼');
   const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const SIDE_GLYPH = { bull: '▲', bear: '▼', neutral: '◆' };
 
   /* ================= theme ================= */
 
@@ -22,6 +23,7 @@
     const next = cur === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = next;
     localStorage.setItem('pulse.theme', next);
+    renderScreener(); // sparkline colors
     if (openTicker) openDrawer(openTicker); // re-render charts with new palette
   });
 
@@ -60,9 +62,9 @@
 
   /* ================= screener ================= */
 
-  const state = { preset: 'all', sector: '', search: '', sortKey: 'ticker', sortDir: 1 };
+  const state = { preset: 'all', sector: '', search: '', signal: '', sortKey: 'ticker', sortDir: 1 };
 
-  // populate sector filter + ticker datalist
+  // populate sector filter + ticker datalist + signal filter
   const sectors = [...new Set(MarketData.STOCKS.map(s => s.sector))].sort();
   for (const sec of sectors) {
     const o = document.createElement('option');
@@ -75,6 +77,17 @@
     o.label = s.name;
     $('#ticker-list').appendChild(o);
   }
+  for (const cat of Signals.CATEGORIES) {
+    const grp = document.createElement('optgroup');
+    grp.label = cat;
+    for (const def of Signals.DEFS.filter(d => d.cat === cat)) {
+      const o = document.createElement('option');
+      o.value = def.id;
+      o.textContent = `${SIDE_GLYPH[def.side]} ${def.name}`;
+      grp.appendChild(o);
+    }
+    $('#signal-filter').appendChild(grp);
+  }
 
   const PRESETS = {
     all:        () => true,
@@ -83,6 +96,8 @@
     bullcross:  s => s.cross && s.cross.type === 'bull',
     bearcross:  s => s.cross && s.cross.type === 'bear',
     uptrend:    s => s.uptrend,
+    bullbias:   s => s.sig.score >= 3,
+    bearbias:   s => s.sig.score <= -3,
   };
 
   function macdCell(s) {
@@ -104,6 +119,14 @@
     </span>`;
   }
 
+  function biasCell(s) {
+    const { score, bull, bear } = s.sig;
+    const badge = score >= 3 ? `<span class="tag tag-up">▲ Bullish ${score > 0 ? '+' + score : score}</span>`
+      : score <= -3 ? `<span class="tag tag-down">▼ Bearish ${score}</span>`
+      : `<span class="tag">Mixed ${score > 0 ? '+' + score : score}</span>`;
+    return `<span class="bias-cell">${badge}<span class="bias-counts">${bull}▲ ${bear}▼</span></span>`;
+  }
+
   function sparkline(closes) {
     const data = closes.slice(-30);
     const w = 110, h = 30, pad = 2;
@@ -122,13 +145,14 @@
 
   const SORT_ACCESSORS = {
     ticker: s => s.t, name: s => s.name, price: s => s.price, chg: s => s.chg,
-    rsi: s => s.rsi ?? -1, off52: s => s.off52,
+    rsi: s => s.rsi ?? -1, score: s => s.sig.score,
     macdState: s => (s.cross ? (s.cross.type === 'bull' ? 3 : 0) : (s.macd > s.signal ? 2 : 1)),
   };
 
   function renderScreener() {
     let rows = MarketData.STOCKS.filter(PRESETS[state.preset]);
     if (state.sector) rows = rows.filter(s => s.sector === state.sector);
+    if (state.signal) rows = rows.filter(s => s.sig.fired.some(f => f.id === state.signal));
     if (state.search) {
       const q = state.search.toUpperCase();
       rows = rows.filter(s => s.t.includes(q) || s.name.toUpperCase().includes(q));
@@ -147,7 +171,7 @@
         <td class="num ${s.chg >= 0 ? 'delta-up' : 'delta-down'}">${arrow(s.chg)} ${fmtPct(Math.abs(s.chg), false)}</td>
         <td class="num">${rsiCell(s)}</td>
         <td>${macdCell(s)}</td>
-        <td class="num col-52w">${fmtPct(s.off52)}</td>
+        <td class="col-bias">${biasCell(s)}</td>
         <td class="col-spark">${sparkline(s.closes)}</td>
       </tr>`).join('');
 
@@ -167,6 +191,7 @@
     renderScreener();
   });
   $('#sector-filter').addEventListener('change', e => { state.sector = e.target.value; renderScreener(); });
+  $('#signal-filter').addEventListener('change', e => { state.signal = e.target.value; renderScreener(); });
   $('#search').addEventListener('input', e => { state.search = e.target.value.trim(); renderScreener(); });
   $('#screener-table thead').addEventListener('click', e => {
     const th = e.target.closest('th[data-sort]');
@@ -190,10 +215,122 @@
   scrim.addEventListener('click', closeDrawer);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDrawer(); $('#modal-scrim').hidden = true; } });
 
-  const SHOW_BARS = 126; // ~6 months
+  const SHOW_BARS = 126;   // ~6 months for oscillator panes
+  const CANDLE_BARS = 63;  // ~3 months for the candle pane
 
-  /* Generic single-pane SVG chart with crosshair + tooltip.
-     series: [{ values, color, width, area? }]; guides: [{y,label}]; bars: {values,posColor,negColor} */
+  /* Candlestick pane: candles + SMA20/50 + Bollinger wash + volume strip. */
+  function drawCandles(el, s) {
+    const N = CANDLE_BARS;
+    const n0 = s.closes.length - N;
+    const dates = MarketData.DATES.slice(-N);
+    const W = 520, H = 230, padL = 56, padR = 10, padT = 8, padB = 20, volH = 30;
+    const plotB = H - padB - volH - 4;
+
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < N; i++) {
+      const gi = n0 + i;
+      lo = Math.min(lo, s.lows[gi], s.bb.lower[gi] ?? Infinity);
+      hi = Math.max(hi, s.highs[gi], s.bb.upper[gi] ?? -Infinity);
+    }
+    const range = hi - lo || 1;
+    lo -= range * 0.04; hi += range * 0.04;
+
+    const x = i => padL + (i + 0.5) * (W - padL - padR) / N;
+    const y = v => padT + (hi - v) / (hi - lo) * (plotB - padT);
+    const slot = (W - padL - padR) / N;
+    const bw = Math.max(Math.min(slot * 0.65, 9), 2);
+
+    const up = cssVar('--up'), down = cssVar('--down');
+    const s1 = cssVar('--series-1'), s2 = cssVar('--series-2');
+    const gridColor = cssVar('--grid'), mutedColor = cssVar('--muted');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+
+    // grid + y labels
+    for (const tv of [lo + range * 0.08, (lo + hi) / 2, hi - range * 0.08]) {
+      svg += `<line x1="${padL}" y1="${y(tv)}" x2="${W - padR}" y2="${y(tv)}" stroke="${gridColor}" stroke-width="1"/>`;
+      svg += `<text x="${padL - 6}" y="${y(tv) + 3.5}" text-anchor="end" font-size="10" fill="${mutedColor}">$${tv.toFixed(2)}</text>`;
+    }
+    // month labels
+    let lastMonth = -1;
+    for (let i = 0; i < N; i++) {
+      if (dates[i].getMonth() !== lastMonth) {
+        lastMonth = dates[i].getMonth();
+        if (i > 2 && i < N - 4)
+          svg += `<text x="${x(i)}" y="${H - 5}" font-size="10" fill="${mutedColor}">${dates[i].toLocaleString('en-US', { month: 'short' })}</text>`;
+      }
+    }
+
+    // Bollinger band wash + edges
+    const bandTop = [], bandBot = [];
+    for (let i = 0; i < N; i++) {
+      const gi = n0 + i;
+      if (s.bb.upper[gi] != null) {
+        bandTop.push([x(i), y(s.bb.upper[gi])]);
+        bandBot.push([x(i), y(s.bb.lower[gi])]);
+      }
+    }
+    if (bandTop.length > 1) {
+      const p = pts => pts.map((q, i) => (i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('');
+      svg += `<path d="${p(bandTop)} ${bandBot.slice().reverse().map(q => 'L' + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('')} Z" fill="${cssVar('--accent')}" opacity="0.06"/>`;
+      svg += `<path d="${p(bandTop)}" fill="none" stroke="${mutedColor}" stroke-width="1" opacity="0.5"/>`;
+      svg += `<path d="${p(bandBot)}" fill="none" stroke="${mutedColor}" stroke-width="1" opacity="0.5"/>`;
+    }
+
+    // SMA lines
+    for (const [series, color] of [[s.sma20, s1], [s.sma50, s2]]) {
+      const pts = [];
+      for (let i = 0; i < N; i++) {
+        const v = series[n0 + i];
+        if (v != null) pts.push([x(i), y(v)]);
+      }
+      if (pts.length > 1)
+        svg += `<path d="${pts.map((q, i) => (i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+    }
+
+    // volume strip
+    let maxVol = 0;
+    for (let i = 0; i < N; i++) maxVol = Math.max(maxVol, s.volumes[n0 + i]);
+    for (let i = 0; i < N; i++) {
+      const gi = n0 + i;
+      const vh = s.volumes[gi] / maxVol * volH;
+      const col = s.closes[gi] >= s.opens[gi] ? up : down;
+      svg += `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${(H - padB - vh).toFixed(1)}" width="${bw.toFixed(1)}" height="${vh.toFixed(1)}" fill="${col}" opacity="0.35"/>`;
+    }
+
+    // candles
+    for (let i = 0; i < N; i++) {
+      const gi = n0 + i;
+      const o = s.opens[gi], c = s.closes[gi], h = s.highs[gi], l = s.lows[gi];
+      const col = c >= o ? up : down;
+      const cx = x(i);
+      svg += `<line x1="${cx.toFixed(1)}" y1="${y(h).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"/>`;
+      const top = y(Math.max(o, c)), bh = Math.max(Math.abs(y(o) - y(c)), 1);
+      svg += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}" rx="1"/>`;
+    }
+
+    svg += `<line id="xhair" x1="0" y1="${padT}" x2="0" y2="${H - padB}" stroke="${mutedColor}" stroke-width="1" opacity="0"/>`;
+    svg += `</svg>`;
+    el.innerHTML = svg + `<div class="chart-tip" hidden></div>`;
+
+    const svgEl = el.querySelector('svg'), tip = el.querySelector('.chart-tip'), xh = el.querySelector('#xhair');
+    svgEl.addEventListener('mousemove', e => {
+      const rect = svgEl.getBoundingClientRect();
+      const sx = (e.clientX - rect.left) / rect.width * W;
+      const i = Math.max(0, Math.min(N - 1, Math.floor((sx - padL) / slot)));
+      const gi = n0 + i;
+      xh.setAttribute('x1', x(i)); xh.setAttribute('x2', x(i)); xh.setAttribute('opacity', '0.5');
+      tip.innerHTML = `<small>${dates[i].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</small> ` +
+        `O ${s.opens[gi].toFixed(2)} · H ${s.highs[gi].toFixed(2)} · L ${s.lows[gi].toFixed(2)} · C ${s.closes[gi].toFixed(2)}` +
+        `<br><small>vol ${(s.volumes[gi] / 1e6).toFixed(1)}M</small>`;
+      tip.hidden = false;
+      tip.style.left = (x(i) / W * rect.width) + 'px';
+      tip.style.top = (e.clientY - rect.top) + 'px';
+    });
+    svgEl.addEventListener('mouseleave', () => { tip.hidden = true; xh.setAttribute('opacity', '0'); });
+  }
+
+  /* Generic single-pane SVG chart with crosshair + tooltip. */
   function drawChart(el, opts) {
     const { series = [], guides = [], bars = null, height = 160, domain = null, fmt = v => v.toFixed(2) } = opts;
     const dates = MarketData.DATES.slice(-SHOW_BARS);
@@ -217,14 +354,12 @@
 
     let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
 
-    // horizontal grid: 3 clean lines + labels
     const ticks = guides.length ? guides.map(g => g.y) : [lo + padRange, (lo + hi) / 2, hi - padRange];
     for (const tv of ticks) {
       svg += `<line x1="${padL}" y1="${y(tv)}" x2="${W - padR}" y2="${y(tv)}" stroke="${gridColor}" stroke-width="1"/>`;
       svg += `<text x="${padL - 6}" y="${y(tv) + 3.5}" text-anchor="end" font-size="10" fill="${mutedColor}" font-family="inherit">${guides.length ? guides.find(g => g.y === tv).label : fmt(tv)}</text>`;
     }
 
-    // month labels along the bottom
     let lastMonth = -1;
     for (let i = 0; i < n; i++) {
       const d = dates[i];
@@ -235,7 +370,6 @@
       }
     }
 
-    // histogram bars (MACD) — diverging around zero, 2px surface gap via width
     if (bars) {
       const zero = y(0);
       svg += `<line x1="${padL}" y1="${zero}" x2="${W - padR}" y2="${zero}" stroke="${cssVar('--hairline')}" stroke-width="1"/>`;
@@ -248,7 +382,6 @@
       });
     }
 
-    // area wash + lines
     for (const s of series) {
       const pts = [];
       s.values.forEach((v, i) => { if (v != null) pts.push([x(i), y(v)]); });
@@ -258,7 +391,6 @@
         svg += `<path d="${path} L ${pts[pts.length - 1][0].toFixed(1)} ${H - padB} L ${pts[0][0].toFixed(1)} ${H - padB} Z" fill="${s.color}" opacity="0.10"/>`;
       }
       svg += `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" stroke-linejoin="round" stroke-linecap="round"/>`;
-      // end marker with surface ring on the primary series
       if (s.endDot) {
         const [ex, ey] = pts[pts.length - 1];
         svg += `<circle cx="${ex}" cy="${ey}" r="6" fill="${surface}"/><circle cx="${ex}" cy="${ey}" r="4" fill="${s.color}"/>`;
@@ -269,7 +401,6 @@
     svg += `</svg>`;
     el.innerHTML = svg + `<div class="chart-tip" hidden></div>`;
 
-    // crosshair + tooltip
     const svgEl = el.querySelector('svg'), tip = el.querySelector('.chart-tip'), xh = el.querySelector('#xhair');
     svgEl.addEventListener('mousemove', e => {
       const rect = svgEl.getBoundingClientRect();
@@ -285,6 +416,28 @@
       tip.style.top = (e.clientY - rect.top) + 'px';
     });
     svgEl.addEventListener('mouseleave', () => { tip.hidden = true; xh.setAttribute('opacity', '0'); });
+  }
+
+  function signalsBlock(s) {
+    const bull = s.sig.fired.filter(f => f.side === 'bull');
+    const bear = s.sig.fired.filter(f => f.side === 'bear');
+    const ctx  = s.sig.fired.filter(f => f.side === 'neutral');
+    const item = f => `<div class="sig-item">
+      <span class="side-badge side-${f.side}">${SIDE_GLYPH[f.side]}</span>
+      <div><strong>${f.name}</strong><span class="sig-cat">${f.cat}</span>
+      <span class="sig-note">${f.note}</span></div>
+    </div>`;
+    const col = (title, list) => list.length
+      ? `<div><h3>${title}</h3>${list.map(item).join('')}</div>` : '';
+    const { score } = s.sig;
+    const verdict = score >= 3 ? `leaning bullish (+${score})` : score <= -3 ? `leaning bearish (${score})` : `mixed (${score >= 0 ? '+' : ''}${score})`;
+    return `<h3>Detected signals — ${verdict}</h3>
+      <div class="sig-cols">
+        ${col(`Bullish (${bull.length})`, bull)}
+        ${col(`Bearish (${bear.length})`, bear)}
+      </div>
+      ${ctx.length ? `<div style="margin-top:6px">${col(`Context (${ctx.length})`, ctx)}</div>` : ''}
+      ${s.sig.fired.length === 0 ? '<p class="empty-note">No notable signals right now — sometimes "nothing happening" is the message.</p>' : ''}`;
   }
 
   function readout(s) {
@@ -304,7 +457,9 @@
 
     notes.push(`<li><strong>${fmtPct(s.off52)} from its 52-week high.</strong> ${s.off52 > -5 ? 'Near highs — strength, but less margin for error.' : s.off52 < -20 ? 'Deep pullback territory — understand the story before buying the dip.' : 'A moderate pullback from the highs.'}</li>`);
 
-    return `<h3>What the indicators say (demo data)</h3><ul>${notes.join('')}</ul>`;
+    notes.push(`<li><strong>Remember:</strong> signals stack. One indicator alone is a whisper; several agreeing (see the detected-signals box above) is a conversation worth having. None of them are guarantees.</li>`);
+
+    return `<h3>How to read this (demo data)</h3><ul>${notes.join('')}</ul>`;
   }
 
   function openDrawer(ticker) {
@@ -321,11 +476,9 @@
     const s1 = cssVar('--series-1'), s2 = cssVar('--series-2');
     const up = cssVar('--up'), down = cssVar('--down');
 
-    drawChart($('#chart-price'), {
-      series: [{ values: s.closes.slice(-SHOW_BARS), color: s1, width: 2, area: true, endDot: true }],
-      height: 180,
-      fmt: v => '$' + v.toFixed(2),
-    });
+    drawCandles($('#chart-price'), s);
+
+    $('#drawer-signals').innerHTML = signalsBlock(s);
 
     drawChart($('#chart-rsi'), {
       series: [{ values: s.rsiSeries.slice(-SHOW_BARS), color: s2, width: 2 }],
@@ -345,11 +498,65 @@
       fmt: v => v.toFixed(2),
     });
 
+    drawChart($('#chart-stoch'), {
+      series: [
+        { values: s.stoch.k.slice(-SHOW_BARS), color: s1, width: 2, label: '%K' },
+        { values: s.stoch.d.slice(-SHOW_BARS), color: s2, width: 2, label: '%D' },
+      ],
+      guides: [{ y: 80, label: '80' }, { y: 50, label: '50' }, { y: 20, label: '20' }],
+      domain: [0, 100],
+      height: 120,
+      fmt: v => v.toFixed(0),
+    });
+
     $('#drawer-read').innerHTML = readout(s);
     drawer.hidden = false;
     scrim.hidden = false;
     drawer.scrollTop = 0;
   }
+
+  /* ================= learn library ================= */
+
+  const learnState = { side: '', search: '' };
+
+  function renderLearn() {
+    const q = learnState.search.toLowerCase();
+    let html = '';
+    for (const cat of Signals.CATEGORIES) {
+      const defs = Signals.DEFS.filter(d =>
+        d.cat === cat &&
+        (!learnState.side || d.side === learnState.side) &&
+        (!q || d.name.toLowerCase().includes(q) || d.blurb.toLowerCase().includes(q)));
+      if (!defs.length) continue;
+      html += `<div class="learn-cat"><h3>${cat}</h3><div class="learn-grid">` +
+        defs.map(d => {
+          const fired = MarketData.SIGNAL_EXAMPLES[d.id] || [];
+          return `<div class="learn-card">
+            <h4><span class="side-badge side-${d.side}">${SIDE_GLYPH[d.side]}</span>${d.name}</h4>
+            <p>${d.blurb}</p>
+            <div class="learn-fired">
+              <span class="lf-label">${fired.length ? 'Firing now:' : 'Not firing on any stock right now'}</span>
+              ${fired.slice(0, 6).map(t => `<button data-open="${t}">${t}</button>`).join('')}
+              ${fired.length > 6 ? `<span class="lf-label">+${fired.length - 6} more</span>` : ''}
+            </div>
+          </div>`;
+        }).join('') + `</div></div>`;
+    }
+    $('#learn-list').innerHTML = html || `<p class="empty-note">No signals match that search.</p>`;
+  }
+
+  $('#learn-side').addEventListener('click', e => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    learnState.side = chip.dataset.side;
+    $$('#learn-side .chip').forEach(c => c.classList.toggle('is-active', c === chip));
+    renderLearn();
+  });
+  $('#learn-search').addEventListener('input', e => { learnState.search = e.target.value.trim(); renderLearn(); });
+  $('#learn-list').addEventListener('click', e => {
+    const btn = e.target.closest('[data-open]');
+    if (btn) openDrawer(btn.dataset.open);
+  });
 
   /* ================= portfolio ================= */
 
@@ -416,7 +623,41 @@
       const s = MarketData.BY_TICKER[h.t];
       if (!s) continue;
 
-      if (s.rsi > 70) cards.push(card(s.t, 'Running hot', 'tag-hot',
+      // composite signal weather report
+      if (s.sig.score >= 4) {
+        const tops = s.sig.fired.filter(f => f.side === 'bull').sort((a, b) => b.weight - a.weight).slice(0, 3);
+        cards.push(card(s.t, 'Signals stacking bullish', 'tag-up',
+          `${s.t} has ${s.sig.bull} bullish signals active right now — including ${tops.map(f => f.name.toLowerCase()).join(', ')}. The technical picture is leaning in your favor; the classic mistake here is selling a winner too early.`,
+          'When independent signals (trend, momentum, volume, patterns) agree, each one corroborates the others. See the stock\'s detail view for the full list.'));
+      } else if (s.sig.score <= -4) {
+        const tops = s.sig.fired.filter(f => f.side === 'bear').sort((a, b) => b.weight - a.weight).slice(0, 3);
+        cards.push(card(s.t, 'Signals stacking bearish', 'tag-down',
+          `${s.t} has ${s.sig.bear} bearish signals active — including ${tops.map(f => f.name.toLowerCase()).join(', ')}. Worth reviewing your position size and your exit plan before the market makes the decision for you.`,
+          'A pile-up of bearish signals doesn\'t force a sale, but it\'s the technical equivalent of several warning lights on at once. Decide your downside limit in advance.'));
+      }
+
+      // marquee individual signals
+      const fired = Object.fromEntries(s.sig.fired.map(f => [f.id, f]));
+      if (fired['golden-cross']) cards.push(card(s.t, 'Golden cross', 'tag-up',
+        `${s.t} just formed a golden cross — its 50-day average crossed above the 200-day. Historically one of the most respected long-term bullish signals; long-term holders generally sit tight through these.`,
+        'It means the intermediate trend has overtaken the long-term trend. It\'s slow, but that\'s the point: it filters out noise.'));
+      if (fired['death-cross']) cards.push(card(s.t, 'Death cross', 'tag-down',
+        `${s.t} just formed a death cross — its 50-day average dropped below the 200-day. The long-term trend has deteriorated; many investors reduce exposure or at least stop adding until it repairs.`,
+        'The bearish mirror of the golden cross. Often late, but it marks a market that has already been weakening for months.'));
+      if (fired['head-shoulders']) cards.push(card(s.t, 'Topping pattern', 'tag-down',
+        `${s.t} is tracing a head-and-shoulders top (${fired['head-shoulders'].note}). If price breaks the neckline, textbook charting expects further downside. Know your exit level.`,
+        'Three peaks with a lower final peak show buyers exhausting. It\'s only confirmed on a neckline break — but it\'s the most-watched top pattern for a reason.'));
+      if (fired['double-top']) cards.push(card(s.t, 'Double top forming', 'tag-down',
+        `${s.t} shows a double top (${fired['double-top'].note}). Two failures at the same ceiling is a caution flag for holders.`,
+        'Buyers rejected the same price twice. Confirmation comes if price breaks below the dip between the two peaks.'));
+      if (fired['double-bottom'] || fired['inv-head-shoulders']) {
+        const f = fired['double-bottom'] || fired['inv-head-shoulders'];
+        cards.push(card(s.t, 'Bottoming pattern', 'tag-up',
+          `${s.t} shows a ${f.name.toLowerCase()} (${f.note}). Sellers are failing to push it lower — constructive if you've been underwater and patient.`,
+          'Reversal patterns at lows mean supply is drying up. They confirm on a break above the pattern\'s neckline.'));
+      }
+
+      if (s.rsi > 70 && !fired['golden-cross']) cards.push(card(s.t, 'Running hot', 'tag-hot',
         `${s.t} has an RSI of ${s.rsi.toFixed(0)} — overbought territory. Momentum is strong, but a lot of good news is already in the price. Some investors trim a little here or at least avoid adding; nobody ever went broke taking partial profits.`,
         'RSI above 70 means the stock rose unusually fast over the last 14 days. It often precedes a pause or pullback, though strong stocks can stay overbought for a while.'));
 
@@ -432,7 +673,7 @@
         `${s.t} just printed a bearish MACD cross. Not a sell signal by itself, but a good moment to review your position size and make sure you'd be comfortable holding through a dip.`,
         'The MACD line crossing below its signal line suggests fading momentum. Many investors use it as a "pay attention" flag rather than an automatic exit.'));
 
-      if (!s.uptrend && s.off52 < -15 && s.rsi >= 30) cards.push(card(s.t, 'Trend caution', 'tag-down',
+      if (!s.uptrend && s.off52 < -15 && s.rsi >= 30 && s.sig.score > -4) cards.push(card(s.t, 'Trend caution', 'tag-down',
         `${s.t} is ${fmtPct(s.off52, false).replace('-', '')} below its 52-week high and trading under its key moving averages. Have an exit plan: decide in advance how much downside you'll accept.`,
         'Price below the 20- and 50-day moving averages means the medium-term trend is down. Trends persist more often than they reverse.'));
 
@@ -441,7 +682,6 @@
         `${s.t} is ${weight.toFixed(0)}% of this portfolio. That's a lot riding on one stock — a single bad earnings report would hit hard. Consider diversifying gradually.`,
         'Most professionals keep single positions under 5–10%. Concentration amplifies both gains and losses; new investors usually underestimate the losses half.'));
 
-      // upcoming event heads-up (within 30 days)
       const ev = MarketData.EVENTS.find(ev2 => {
         const d = new Date(ev2.date + 'T12:00:00');
         const days = (d - today) / 86400000;
@@ -452,7 +692,6 @@
         'Scheduled events like earnings concentrate uncertainty into one moment. Options markets often "price in" the expected move; the surprise is what moves the stock.'));
     }
 
-    // portfolio-level: next FOMC
     const fed = MarketData.EVENTS.find(ev => {
       const days = (new Date(ev.date + 'T12:00:00') - today) / 86400000;
       return ev.kind === 'fed' && days >= 0;
@@ -587,5 +826,6 @@
 
   renderScreener();
   renderPortfolio();
+  renderLearn();
   renderConn();
 })();

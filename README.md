@@ -7,12 +7,37 @@ accent). No build step, no dependencies — open `index.html` in any browser.
 ## Features
 
 - **Screener** — 24 well-known stocks with price, daily change, **RSI (14)**,
-  **MACD (12, 26, 9)** state, distance from the 52-week high, and a 30-day
-  sparkline. Preset screens (RSI oversold/overbought, bullish/bearish MACD
-  cross, uptrend), sector filter, search, and sortable columns.
-- **Detail view** — click any row for a 6-month price chart plus dedicated RSI
-  and MACD panes (with histogram), a crosshair tooltip, and a plain-English
-  "what the indicators say" readout aimed at beginners.
+  **MACD (12, 26, 9)** state, a composite **bull/bear bias score**, and a
+  30-day sparkline. Preset screens (RSI oversold/overbought, MACD crosses,
+  uptrend, bullish/bearish bias), a **filter for any individual signal**,
+  sector filter, search, and sortable columns.
+- **~70-signal bull/bear engine** — every classic chart sign, each with a
+  detector and a plain-English explanation:
+  - *Momentum*: RSI overbought/oversold + bullish/bearish **divergence**,
+    MACD crosses and zero-line state, slow **Stochastic** crosses,
+    **Williams %R**, **CCI**, **rate of change** thrusts/slumps.
+  - *Trend*: **golden cross / death cross** (50/200-day), 200-day position,
+    stacked moving averages, **ADX** strong up/downtrends, **+DI/−DI**
+    crosses, **Parabolic SAR** flips, **Ichimoku** cloud position and
+    Tenkan/Kijun crosses.
+  - *Volatility*: Bollinger band touches, **Bollinger squeeze**, ATR
+    expansion.
+  - *Volume*: **OBV** accumulation/distribution, 2× volume spikes, **Money
+    Flow Index** extremes.
+  - *Candlesticks*: hammer, hanging man, inverted hammer, shooting star,
+    bullish/bearish **engulfing**, harami, piercing line, dark cloud cover,
+    **morning/evening star**, three white soldiers, three black crows,
+    tweezer top/bottom, doji.
+  - *Chart patterns*: **double top/bottom**, **head & shoulders** (and
+    inverse), ascending/descending **triangles**, rising/falling **wedges**,
+    new 52-week high/low, gaps up/down.
+- **Detail view** — click any row for a 3-month **candlestick chart** with
+  SMA 20/50, Bollinger bands and a volume strip, plus dedicated RSI, MACD and
+  Stochastic panes, crosshair tooltips, the full list of detected signals for
+  that stock, and a plain-English readout aimed at beginners.
+- **Learn tab** — a searchable library documenting every signal above (what
+  it looks like, what it hints, which side it favors) with live "firing now"
+  examples that jump straight to the chart.
 - **Portfolio & suggestions** — track holdings (saved in your browser) and get
   rule-based observations: overbought/oversold warnings, MACD momentum shifts,
   trend caution, concentration risk, and heads-ups for upcoming events that

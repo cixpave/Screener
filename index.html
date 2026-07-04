@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulse — Market Screener</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%23D97757'/></svg>">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot" aria-hidden="true"></span>
+    <span class="brand-name">Pulse</span>
+    <span class="brand-sub">market screener</span>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="Main sections">
+    <button class="tab is-active" role="tab" aria-selected="true" data-view="screener">Screener</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="portfolio">Portfolio</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="events">Events</button>
+  </nav>
+
+  <div class="topbar-actions">
+    <button class="btn btn-ghost" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">◐</button>
+    <button class="btn btn-connect" id="connect-btn">
+      <span class="conn-dot" id="conn-dot" aria-hidden="true"></span>
+      <span id="conn-label">Connect thinkorswim</span>
+    </button>
+  </div>
+</header>
+
+<div class="data-banner" id="data-banner">
+  Demo data — prices are simulated for learning. Connect a Schwab / thinkorswim account for live quotes.
+</div>
+
+<div class="tipbar" id="tipbar">
+  <span class="tipbar-tag">Tip</span>
+  <span id="tipbar-text"></span>
+  <button class="tipbar-next" id="tipbar-next" title="Next tip" aria-label="Next tip">→</button>
+</div>
+
+<main>
+
+  <!-- ============ SCREENER ============ -->
+  <section class="view is-active" id="view-screener">
+    <div class="toolbar">
+      <div class="presets" id="presets" role="group" aria-label="Preset screens">
+        <button class="chip is-active" data-preset="all">All stocks</button>
+        <button class="chip" data-preset="oversold" title="RSI below 30 — the stock has fallen hard and fast">RSI oversold</button>
+        <button class="chip" data-preset="overbought" title="RSI above 70 — the stock has risen hard and fast">RSI overbought</button>
+        <button class="chip" data-preset="bullcross" title="MACD line just crossed above its signal line">Bullish MACD cross</button>
+        <button class="chip" data-preset="bearcross" title="MACD line just crossed below its signal line">Bearish MACD cross</button>
+        <button class="chip" data-preset="uptrend" title="Price above its 20- and 50-day averages">Uptrend</button>
+      </div>
+      <div class="toolbar-right">
+        <select id="sector-filter" class="select" aria-label="Filter by sector">
+          <option value="">All sectors</option>
+        </select>
+        <input type="search" id="search" class="search" placeholder="Search ticker…" aria-label="Search ticker">
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="screener-table" id="screener-table">
+        <thead>
+          <tr>
+            <th data-sort="ticker">Symbol</th>
+            <th data-sort="name" class="col-name">Company</th>
+            <th data-sort="price" class="num">Price</th>
+            <th data-sort="chg" class="num">1d %</th>
+            <th data-sort="rsi" class="num">
+              RSI <button class="info-btn" data-term="rsi" aria-label="What is RSI?">?</button>
+            </th>
+            <th data-sort="macdState">
+              MACD <button class="info-btn" data-term="macd" aria-label="What is MACD?">?</button>
+            </th>
+            <th data-sort="off52" class="num col-52w">Off 52-w high</th>
+            <th class="col-spark">30 days</th>
+          </tr>
+        </thead>
+        <tbody id="screener-body"></tbody>
+      </table>
+      <p class="empty-note" id="screener-empty" hidden>No stocks match this screen right now. Try a different preset or clear the filters.</p>
+    </div>
+  </section>
+
+  <!-- ============ PORTFOLIO ============ -->
+  <section class="view" id="view-portfolio">
+    <div class="portfolio-grid">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Your holdings</h2>
+          <span class="panel-sub">saved in this browser</span>
+        </div>
+        <div class="stat-row" id="portfolio-stats"></div>
+        <div class="table-wrap">
+          <table class="holdings-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th class="num">Shares</th>
+                <th class="num">Avg cost</th>
+                <th class="num">Price</th>
+                <th class="num">Value</th>
+                <th class="num">Gain / loss</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="holdings-body"></tbody>
+          </table>
+        </div>
+        <form class="add-holding" id="add-holding-form">
+          <input list="ticker-list" id="add-ticker" placeholder="Ticker" required aria-label="Ticker" maxlength="6">
+          <datalist id="ticker-list"></datalist>
+          <input type="number" id="add-shares" placeholder="Shares" min="0.001" step="any" required aria-label="Shares">
+          <input type="number" id="add-cost" placeholder="Avg cost $" min="0.01" step="any" required aria-label="Average cost">
+          <button class="btn btn-primary" type="submit">Add</button>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Suggestions</h2>
+          <span class="panel-sub">based on RSI, MACD, trend &amp; upcoming events</span>
+        </div>
+        <div id="suggestions"></div>
+        <p class="disclaimer">These are educational observations generated from technical indicators on demo data — not financial advice. Always do your own research before trading.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ EVENTS ============ -->
+  <section class="view" id="view-events">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Upcoming market events</h2>
+        <label class="check-label"><input type="checkbox" id="events-mine-only"> only events affecting my holdings</label>
+      </div>
+      <p class="panel-note">Scheduled meetings and reports often move markets. New investors: expect bigger price swings on these days, and be careful placing market orders right when news drops.</p>
+      <div id="events-list"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============ DETAIL DRAWER ============ -->
+<div class="drawer-scrim" id="drawer-scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Stock detail">
+  <div class="drawer-head">
+    <div>
+      <h2 id="drawer-ticker"></h2>
+      <span id="drawer-name" class="drawer-sub"></span>
+    </div>
+    <div class="drawer-price">
+      <span id="drawer-price"></span>
+      <span id="drawer-chg"></span>
+    </div>
+    <button class="btn btn-ghost drawer-close" id="drawer-close" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="chart-block">
+      <div class="chart-title">Price <span class="chart-title-sub">6 months, daily close</span></div>
+      <div id="chart-price" class="chart"></div>
+    </div>
+    <div class="chart-block">
+      <div class="chart-title">RSI (14) <span class="chart-title-sub">above 70 = overbought · below 30 = oversold</span></div>
+      <div id="chart-rsi" class="chart"></div>
+    </div>
+    <div class="chart-block">
+      <div class="chart-title">MACD (12, 26, 9)</div>
+      <div class="chart-legend" id="macd-legend">
+        <span class="legend-item"><span class="legend-swatch swatch-s1"></span>MACD line</span>
+        <span class="legend-item"><span class="legend-swatch swatch-s2"></span>Signal line</span>
+        <span class="legend-item"><span class="legend-swatch swatch-hist"></span>Histogram</span>
+      </div>
+      <div id="chart-macd" class="chart"></div>
+    </div>
+    <div class="read-block" id="drawer-read"></div>
+  </div>
+</aside>
+
+<!-- ============ CONNECT MODAL ============ -->
+<div class="modal-scrim" id="modal-scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <h2 id="modal-title">Connect to thinkorswim</h2>
+      <button class="btn btn-ghost" id="modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p>thinkorswim is part of <strong>Charles Schwab</strong>. Live data comes through the Schwab Trader API using OAuth — your password is never entered here.</p>
+      <ol class="steps">
+        <li>Create a (free) app at <strong>developer.schwab.com</strong> and request the <em>Market Data</em> product.</li>
+        <li>Set your app's callback URL to the value below.</li>
+        <li>Paste your <strong>App Key</strong> here and click <em>Authorize with Schwab</em>.</li>
+      </ol>
+      <label class="field">
+        <span>App Key (client id)</span>
+        <input type="text" id="schwab-key" placeholder="e.g. Xr2…" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Callback URL</span>
+        <input type="text" id="schwab-callback" value="https://127.0.0.1:8443/callback" autocomplete="off">
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="schwab-auth">Authorize with Schwab</button>
+        <button class="btn btn-ghost" id="schwab-disconnect">Disconnect</button>
+      </div>
+      <p class="fine-print">Note: completing the token exchange requires a small local proxy (the Schwab API does not allow direct browser calls). Until then, Pulse runs on clearly-labelled demo data so you can learn the tools risk-free. Your App Key is stored only in this browser.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ TERM POPOVER ============ -->
+<div class="popover" id="popover" hidden></div>
+
+<script src="js/indicators.js"></script>
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,1 +1,67 @@
-# Screener
+# Pulse — Market Screener
+
+A modern, minimalist stock screener for new investors, styled with the Claude
+color scheme (cream/ivory light mode, warm charcoal dark mode, Claude-orange
+accent). No build step, no dependencies — open `index.html` in any browser.
+
+## Features
+
+- **Screener** — 24 well-known stocks with price, daily change, **RSI (14)**,
+  **MACD (12, 26, 9)** state, distance from the 52-week high, and a 30-day
+  sparkline. Preset screens (RSI oversold/overbought, bullish/bearish MACD
+  cross, uptrend), sector filter, search, and sortable columns.
+- **Detail view** — click any row for a 6-month price chart plus dedicated RSI
+  and MACD panes (with histogram), a crosshair tooltip, and a plain-English
+  "what the indicators say" readout aimed at beginners.
+- **Portfolio & suggestions** — track holdings (saved in your browser) and get
+  rule-based observations: overbought/oversold warnings, MACD momentum shifts,
+  trend caution, concentration risk, and heads-ups for upcoming events that
+  affect what you hold. Every suggestion has a "Why?" explainer.
+- **Events calendar** — the Fed's published 2026 FOMC meeting dates, plus CPI
+  reports, jobs reports, and (estimated) earnings dates, each with a note on
+  how that kind of event tends to move stocks.
+- **Beginner tips** — a rotating tip bar and click-to-learn glossary popovers
+  for RSI and MACD.
+- **Light & dark themes** — follows your system preference, with a manual
+  toggle. Chart colors are validated for color-vision-deficiency separation
+  and contrast in both modes.
+
+## Running it
+
+```bash
+# any static server works, e.g.:
+python3 -m http.server 8000
+# then open http://localhost:8000
+```
+
+Or just double-click `index.html`.
+
+## Data
+
+Prices are **simulated demo data** (a seeded random walk, deterministic across
+visits) so you can learn RSI and MACD risk-free. Every screen is labelled
+accordingly. FOMC dates are the Fed's published 2026 schedule; CPI/jobs and
+earnings dates are approximate.
+
+## Connecting thinkorswim (Charles Schwab)
+
+thinkorswim is part of Charles Schwab, and live data comes through the
+[Schwab Trader API](https://developer.schwab.com) via OAuth:
+
+1. Create a free developer account at **developer.schwab.com** and register an
+   app with the *Market Data Production* product.
+2. In Pulse, click **Connect thinkorswim**, paste your **App Key**, set the
+   callback URL to match your app registration, and click **Authorize with
+   Schwab** — this opens Schwab's official login page (your password is never
+   entered in Pulse).
+3. The Schwab API does not allow direct browser calls (CORS), so completing
+   the token exchange and streaming quotes requires a small local proxy —
+   a few lines of Node/Python that swap the OAuth `code` for tokens and relay
+   `GET /marketdata/v1/quotes`. Until that's in place, Pulse clearly labels
+   everything as demo data.
+
+## Disclaimer
+
+Pulse is an educational tool. Nothing it shows is financial advice. Technical
+indicators describe the past and tilt probabilities — they do not predict the
+future. Always do your own research.

@@ -4,7 +4,9 @@
 
 const MarketData = (() => {
 
-  const UNIVERSE = [
+  /* Curated anchors for well-known names (price level + volatility feel);
+     every other S&P 500 constituent gets deterministic hash-based traits. */
+  const CURATED = [
     { t: 'AAPL', name: 'Apple',              sector: 'Technology',    px: 232, vol: 0.016, drift:  0.0004 },
     { t: 'MSFT', name: 'Microsoft',          sector: 'Technology',    px: 448, vol: 0.015, drift:  0.0005 },
     { t: 'NVDA', name: 'NVIDIA',             sector: 'Technology',    px: 172, vol: 0.028, drift:  0.0009 },
@@ -30,6 +32,36 @@ const MarketData = (() => {
     { t: 'CVX',  name: 'Chevron',            sector: 'Energy',        px: 152, vol: 0.014, drift:  0.0001 },
     { t: 'BA',   name: 'Boeing',             sector: 'Industrials',   px: 182, vol: 0.023, drift:  0.0002 },
   ];
+  const CURATED_BY_T = Object.fromEntries(CURATED.map(c => [c.t, c]));
+
+  /* Short sector labels for the filter (GICS names are long). */
+  const SECTOR_SHORT = {
+    'Information Technology': 'Technology',
+    'Communication Services': 'Communication',
+    'Consumer Discretionary': 'Consumer Disc.',
+    'Consumer Staples': 'Consumer Staples',
+    'Health Care': 'Healthcare',
+    'Financials': 'Financials',
+    'Industrials': 'Industrials',
+    'Energy': 'Energy',
+    'Materials': 'Materials',
+    'Real Estate': 'Real Estate',
+    'Utilities': 'Utilities',
+  };
+
+  /* Full S&P 500 universe from js/universe.js, with curated overrides. */
+  const UNIVERSE = SP500.map(([t, name, gics]) => {
+    const cur = CURATED_BY_T[t];
+    if (cur) return cur;
+    const h = hash(t);
+    return {
+      t, name,
+      sector: SECTOR_SHORT[gics] || gics,
+      px: +(12 * Math.pow(60, (h % 1000) / 1000)).toFixed(2),  // ~$12–$720, log-spread
+      vol: 0.010 + ((h >>> 10) % 100) / 100 * 0.020,           // 1.0%–3.0% daily
+      drift: (((h >>> 3) % 100) / 100 - 0.45) * 0.0012,
+    };
+  });
 
   const BARS = 320;               // enough history for the 200-day average
   const SEED_EPOCH = 20260704;    // fixed so every visit shows the same demo tape
@@ -109,8 +141,10 @@ const MarketData = (() => {
 
   const DATES = genDates(BARS);
 
-  const STOCKS = UNIVERSE.map(spec => {
-    const { opens, highs, lows, closes, volumes } = genSeries(spec);
+  /* Compute the full indicator + signal state for one stock from its series.
+     Used at boot (demo series) and again when live candles replace them. */
+  function computeStock(spec, series) {
+    const { opens, highs, lows, closes, volumes } = series;
     const last = closes.length - 1;
 
     const r = Indicators.rsi(closes);
@@ -158,15 +192,57 @@ const MarketData = (() => {
     };
     stock.sig = Signals.evaluate(stock);
     return stock;
-  });
+  }
 
+  const STOCKS = UNIVERSE.map(spec => computeStock(spec, genSeries(spec)));
   const BY_TICKER = Object.fromEntries(STOCKS.map(s => [s.t, s]));
 
-  /* Which tickers each signal currently fires on (for the Learn library). */
-  const SIGNAL_EXAMPLES = {};
-  for (const s of STOCKS)
-    for (const f of s.sig.fired)
-      (SIGNAL_EXAMPLES[f.id] = SIGNAL_EXAMPLES[f.id] || []).push(s.t);
+  /* Replace a stock's series with real candles (from a live provider) and
+     recompute everything in place, so existing references stay valid. */
+  function refreshFromCandles(t, series) {
+    const s = BY_TICKER[t];
+    if (!s) return null;
+    const fresh = computeStock({ t: s.t, name: s.name, sector: s.sector, px: s.px, vol: s.vol, drift: s.drift }, series);
+    Object.assign(s, fresh, { liveHistory: true });
+    signalExamplesDirty = true;
+    return s;
+  }
+
+  /* Apply a live quote: update today's bar with the real price and
+     recompute the stock so signals stay honest with the new close. */
+  function applyQuote(t, price, prevClose) {
+    const s = BY_TICKER[t];
+    if (!s || !(price > 0)) return null;
+    const n = s.closes.length;
+    const series = {
+      opens: s.opens.slice(), highs: s.highs.slice(), lows: s.lows.slice(),
+      closes: s.closes.slice(), volumes: s.volumes.slice(),
+    };
+    series.closes[n - 1] = price;
+    series.highs[n - 1] = Math.max(series.highs[n - 1], price);
+    series.lows[n - 1] = Math.min(series.lows[n - 1], price);
+    if (prevClose > 0 && !s.liveHistory) series.closes[n - 2] = prevClose;
+    const fresh = computeStock({ t: s.t, name: s.name, sector: s.sector, px: s.px, vol: s.vol, drift: s.drift }, series);
+    Object.assign(s, fresh, { liveHistory: s.liveHistory, liveQuote: true, quotedAt: Date.now() });
+    if (prevClose > 0) s.chg = (price / prevClose - 1) * 100;
+    signalExamplesDirty = true;
+    return s;
+  }
+
+  /* Which tickers each signal currently fires on (for the Learn library).
+     Recomputed lazily because live updates invalidate it. */
+  let signalExamplesDirty = true;
+  let signalExamplesCache = {};
+  function signalExamples() {
+    if (signalExamplesDirty) {
+      signalExamplesCache = {};
+      for (const s of STOCKS)
+        for (const f of s.sig.fired)
+          (signalExamplesCache[f.id] = signalExamplesCache[f.id] || []).push(s.t);
+      signalExamplesDirty = false;
+    }
+    return signalExamplesCache;
+  }
 
   /* ---------- market events ---------- */
   /* FOMC dates are the Fed's published 2026 schedule. CPI / jobs-report dates
@@ -253,5 +329,8 @@ const MarketData = (() => {
     },
   };
 
-  return { STOCKS, BY_TICKER, DATES, EVENTS, TIPS, GLOSSARY, SIGNAL_EXAMPLES };
+  return {
+    STOCKS, BY_TICKER, DATES, EVENTS, TIPS, GLOSSARY, BARS,
+    signalExamples, refreshFromCandles, applyQuote,
+  };
 })();

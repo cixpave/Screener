@@ -3,14 +3,30 @@
 A modern, minimalist stock screener for new investors, styled with the Claude
 color scheme (cream/ivory light mode, warm charcoal dark mode, Claude-orange
 accent). No build step, no dependencies — open `index.html` in any browser.
+Fully responsive: works as well on a phone as on a desktop.
 
 ## Features
 
-- **Screener** — 24 well-known stocks with price, daily change, **RSI (14)**,
-  **MACD (12, 26, 9)** state, a composite **bull/bear bias score**, and a
-  30-day sparkline. Preset screens (RSI oversold/overbought, MACD crosses,
-  uptrend, bullish/bearish bias), a **filter for any individual signal**,
-  sector filter, search, and sortable columns.
+- **Screener — the full S&P 500 (503 stocks)** with price, daily change,
+  **RSI (14)**, **MACD (12, 26, 9)** state, a composite **bull/bear bias
+  score**, and a 30-day sparkline. Preset screens (RSI oversold/overbought,
+  MACD crosses, uptrend, bullish/bearish bias), a **filter for any individual
+  signal**, sector filter, search, sortable columns, and paged loading.
+- **Live quotes** — plug in a free API key (Connect → Live quotes) and prices
+  update constantly: what's on screen and what you hold refreshes first, then
+  the rest of the index cycles within the provider's free rate limit.
+  Supported providers: **Finnhub** (real-time quotes) and **Twelve Data**
+  (quotes + real daily OHLCV history, so candles and patterns compute on real
+  bars when you open a stock — cached for the day). Signals are recomputed on
+  every fresh quote, so the bias column stays honest. Without a key the app
+  runs on clearly-labelled demo data.
+- **Pattern tool on every chart** — open any stock and toggle overlays drawn
+  directly on the candles: **swing points** (pivot highs/lows), fitted
+  **trendlines**, clustered **support/resistance levels** (with touch
+  counts), detected **chart patterns** (double top/bottom and head &
+  shoulders with anchor points and necklines drawn and labelled), and
+  **candle marks** (▲/▼ on every bar where a candlestick pattern fired — the
+  crosshair names them).
 - **~70-signal bull/bear engine** — every classic chart sign, each with a
   detector and a plain-English explanation:
   - *Momentum*: RSI overbought/oversold + bullish/bearish **divergence**,

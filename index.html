@@ -79,7 +79,7 @@
             <th data-sort="rsi" class="num">
               RSI <button class="info-btn" data-term="rsi" aria-label="What is RSI?">?</button>
             </th>
-            <th data-sort="macdState">
+            <th data-sort="macdState" class="col-macd">
               MACD <button class="info-btn" data-term="macd" aria-label="What is MACD?">?</button>
             </th>
             <th data-sort="score" class="col-bias">
@@ -91,6 +91,10 @@
         <tbody id="screener-body"></tbody>
       </table>
       <p class="empty-note" id="screener-empty" hidden>No stocks match this screen right now. Try a different preset or clear the filters.</p>
+    </div>
+    <div class="table-foot">
+      <span id="result-count" class="result-count"></span>
+      <button class="btn btn-ghost" id="load-more" hidden>Show more</button>
     </div>
   </section>
 
@@ -193,6 +197,14 @@
   <div class="drawer-body">
     <div class="chart-block">
       <div class="chart-title">Price <span class="chart-title-sub">3 months, daily candles + volume</span></div>
+      <div class="pattern-tools" id="pattern-tools" role="group" aria-label="Pattern tools">
+        <span class="pt-label">Pattern tools:</span>
+        <button class="chip chip-sm" data-tool="swings">Swing points</button>
+        <button class="chip chip-sm" data-tool="trendlines">Trendlines</button>
+        <button class="chip chip-sm" data-tool="levels">Support / resistance</button>
+        <button class="chip chip-sm" data-tool="patterns">Chart patterns</button>
+        <button class="chip chip-sm" data-tool="candles">Candle marks</button>
+      </div>
       <div class="chart-legend">
         <span class="legend-item"><span class="legend-swatch swatch-s1"></span>SMA 20</span>
         <span class="legend-item"><span class="legend-swatch swatch-s2"></span>SMA 50</span>
@@ -230,10 +242,27 @@
 <div class="modal-scrim" id="modal-scrim" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-head">
-      <h2 id="modal-title">Connect to thinkorswim</h2>
+      <h2 id="modal-title">Connect live data &amp; thinkorswim</h2>
       <button class="btn btn-ghost" id="modal-close" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
+      <h3 class="modal-section">Live quotes (free)</h3>
+      <p>Keep all 503 S&amp;P 500 prices updating constantly with a free API key — no brokerage account needed. Keys are stored only in this browser.</p>
+      <label class="field">
+        <span>Finnhub API key <em>(finnhub.io — real-time quotes, recommended)</em></span>
+        <input type="text" id="finnhub-key" placeholder="paste your free key" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Twelve Data API key <em>(twelvedata.com — adds real daily candles &amp; patterns)</em></span>
+        <input type="text" id="twelvedata-key" placeholder="paste your free key" autocomplete="off">
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="live-save">Save &amp; go live</button>
+        <button class="btn btn-ghost" id="live-clear">Use demo data</button>
+      </div>
+      <p class="fine-print">Free tiers are rate-limited (Finnhub ~60 quotes/min), so Pulse refreshes what's on your screen and what you hold first, then cycles the rest of the index continuously.</p>
+
+      <h3 class="modal-section">Brokerage — thinkorswim</h3>
       <p>thinkorswim is part of <strong>Charles Schwab</strong>. Live data comes through the Schwab Trader API using OAuth — your password is never entered here.</p>
       <ol class="steps">
         <li>Create a (free) app at <strong>developer.schwab.com</strong> and request the <em>Market Data</em> product.</li>
@@ -262,7 +291,9 @@
 
 <script src="js/indicators.js"></script>
 <script src="js/patterns.js"></script>
+<script src="js/universe.js"></script>
 <script src="js/data.js"></script>
+<script src="js/live.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

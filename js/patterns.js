@@ -1,7 +1,9 @@
 /* Signal registry: every bull/bear chart sign the screener knows.
    Each definition has a detector run against a stock's full series, plus a
    beginner-friendly blurb used by the Learn library. Sides: 'bull', 'bear',
-   'neutral'. Weight feeds the composite bias score. */
+   'neutral'. Weight feeds the composite bias score.
+   Also exposes overlay geometry (pivots, trendlines, S/R levels, pattern
+   anchors, per-candle marks) for the chart pattern tool. */
 
 const Signals = (() => {
   const I = Indicators;
@@ -9,7 +11,7 @@ const Signals = (() => {
   const at = (arr, ago) => arr[arr.length - 1 - ago];
   const pct = n => (n > 0 ? '+' : '') + n.toFixed(1) + '%';
 
-  /* ---------- candlestick helpers ---------- */
+  /* ---------- candlestick primitives ---------- */
 
   function bar(s, i) {
     const o = s.opens[i], h = s.highs[i], l = s.lows[i], c = s.closes[i];
@@ -24,8 +26,173 @@ const Signals = (() => {
   const inDowntrend = (s, i) => s.sma20[i] != null && s.closes[i] < s.sma20[i];
   const inUptrend   = (s, i) => s.sma20[i] != null && s.closes[i] > s.sma20[i];
 
-  /* Scan the last `span` completed bars, newest first; det(i) returns a note
-     or null. Reports the most recent hit with "x day(s) ago" appended. */
+  /* One table drives BOTH the registry detectors and the per-candle chart
+     marks. check(s, i) returns a note string or null for the bar at index i
+     (multi-bar patterns are anchored on their final bar). */
+  const CANDLE_CHECKS = [
+    {
+      id: 'hammer', name: 'Hammer', side: 'bull', weight: 1,
+      blurb: 'A small body with a long lower shadow after a decline: sellers pushed hard intraday, but buyers slammed it back up by the close. A one-bar hint that the low is being defended.',
+      check: (s, i) => {
+        const b = bar(s, i);
+        return inDowntrend(s, i) && b.lower >= 2 * b.body && b.upper <= 0.4 * b.body + 0.05 * b.range && b.body > 0
+          ? 'long lower shadow after a decline' : null;
+      },
+    },
+    {
+      id: 'hanging-man', name: 'Hanging man', side: 'bear', weight: 1,
+      blurb: 'The same shape as a hammer, but after a rise: the intraday dumping shows sellers are getting active even though the close recovered. A warning shot at the top.',
+      check: (s, i) => {
+        const b = bar(s, i);
+        return inUptrend(s, i) && b.lower >= 2 * b.body && b.upper <= 0.4 * b.body + 0.05 * b.range && b.body > 0
+          ? 'hammer shape after a rise — intraday selling appeared' : null;
+      },
+    },
+    {
+      id: 'inverted-hammer', name: 'Inverted hammer', side: 'bull', weight: 1,
+      blurb: 'A small body with a long upper shadow after a decline: buyers probed higher. Needs confirmation from the next candle, but it\'s an early bottoming tell.',
+      check: (s, i) => {
+        const b = bar(s, i);
+        return inDowntrend(s, i) && b.upper >= 2 * b.body && b.lower <= 0.4 * b.body + 0.05 * b.range && b.body > 0
+          ? 'long upper shadow after a decline' : null;
+      },
+    },
+    {
+      id: 'shooting-star', name: 'Shooting star', side: 'bear', weight: 1,
+      blurb: 'A long upper shadow after a rise: buyers pushed to new highs intraday and got rejected hard. One of the most-watched single-bar topping signals.',
+      check: (s, i) => {
+        const b = bar(s, i);
+        return inUptrend(s, i) && b.upper >= 2 * b.body && b.lower <= 0.4 * b.body + 0.05 * b.range && b.body > 0
+          ? 'high rejected with a long upper shadow' : null;
+      },
+    },
+    {
+      id: 'bull-engulf', name: 'Bullish engulfing', side: 'bull', weight: 2,
+      blurb: 'A big up candle whose body completely swallows the prior down candle\'s body: buyers overwhelmed everything sellers did the day before. Strongest after a decline.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        return p.bear && b.bull && b.o <= p.c && b.c >= p.o && b.body > p.body
+          ? 'up candle engulfed the prior down candle' : null;
+      },
+    },
+    {
+      id: 'bear-engulf', name: 'Bearish engulfing', side: 'bear', weight: 2,
+      blurb: 'A big down candle that swallows the prior up candle\'s body: sellers erased the previous day\'s optimism and then some. Strongest after a rise.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        return p.bull && b.bear && b.o >= p.c && b.c <= p.o && b.body > p.body
+          ? 'down candle engulfed the prior up candle' : null;
+      },
+    },
+    {
+      id: 'bull-harami', name: 'Bullish harami', side: 'bull', weight: 1,
+      blurb: 'A small up candle tucked inside the prior big down candle\'s body: the selling wave paused. Mild by itself — watch what follows.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        return p.bear && b.bull && b.o > p.c && b.c < p.o && p.body > b.body * 1.6
+          ? 'small up candle inside the prior down candle' : null;
+      },
+    },
+    {
+      id: 'bear-harami', name: 'Bearish harami', side: 'bear', weight: 1,
+      blurb: 'A small down candle inside the prior big up candle\'s body: the buying wave paused — momentum hesitation after a run-up.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        return p.bull && b.bear && b.o < p.c && b.c > p.o && p.body > b.body * 1.6
+          ? 'small down candle inside the prior up candle' : null;
+      },
+    },
+    {
+      id: 'piercing-line', name: 'Piercing line', side: 'bull', weight: 1,
+      blurb: 'After a down candle, the next opens lower but rallies to close above the midpoint of the previous body: dip-buyers reclaimed more than half the lost ground.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        const mid = (p.o + p.c) / 2;
+        return p.bear && b.bull && b.o < p.c && b.c > mid && b.c < p.o
+          ? 'gap down reversed to close above the prior midpoint' : null;
+      },
+    },
+    {
+      id: 'dark-cloud', name: 'Dark cloud cover', side: 'bear', weight: 1,
+      blurb: 'After an up candle, the next opens higher but sells off to close below the midpoint of the previous body: the morning\'s optimism got sold hard.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        const mid = (p.o + p.c) / 2;
+        return p.bull && b.bear && b.o > p.c && b.c < mid && b.c > p.o
+          ? 'gap up reversed to close below the prior midpoint' : null;
+      },
+    },
+    {
+      id: 'morning-star', name: 'Morning star', side: 'bull', weight: 2,
+      blurb: 'Three bars: a big down candle, a small indecision candle, then a big up candle closing well into the first one\'s body. A classic three-act bottom: capitulation → pause → reversal.',
+      check: (s, i) => {
+        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
+        return a.bear && a.body > 0.5 * a.range && m.body < 0.5 * a.body &&
+               b.bull && b.c > (a.o + a.c) / 2
+          ? 'down candle → pause → strong up candle' : null;
+      },
+    },
+    {
+      id: 'evening-star', name: 'Evening star', side: 'bear', weight: 2,
+      blurb: 'Three bars: a big up candle, a small indecision candle, then a big down candle closing well into the first one\'s body. The three-act top: euphoria → pause → reversal.',
+      check: (s, i) => {
+        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
+        return a.bull && a.body > 0.5 * a.range && m.body < 0.5 * a.body &&
+               b.bear && b.c < (a.o + a.c) / 2
+          ? 'up candle → pause → strong down candle' : null;
+      },
+    },
+    {
+      id: 'three-soldiers', name: 'Three white soldiers', side: 'bull', weight: 2, span: 1,
+      blurb: 'Three consecutive solid up candles, each closing higher: steady, methodical buying across three sessions — one of the strongest short-term continuation patterns.',
+      check: (s, i) => {
+        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
+        return a.bull && m.bull && b.bull &&
+               m.c > a.c && b.c > m.c &&
+               a.body > 0.5 * a.range && m.body > 0.5 * m.range && b.body > 0.5 * b.range
+          ? 'three solid up candles in a row' : null;
+      },
+    },
+    {
+      id: 'three-crows', name: 'Three black crows', side: 'bear', weight: 2, span: 1,
+      blurb: 'Three consecutive solid down candles, each closing lower: persistent selling with no real bounce — a strong short-term bearish pattern.',
+      check: (s, i) => {
+        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
+        return a.bear && m.bear && b.bear &&
+               m.c < a.c && b.c < m.c &&
+               a.body > 0.5 * a.range && m.body > 0.5 * m.range && b.body > 0.5 * b.range
+          ? 'three solid down candles in a row' : null;
+      },
+    },
+    {
+      id: 'tweezer-bottom', name: 'Tweezer bottom', side: 'bull', weight: 1,
+      blurb: 'Two candles with nearly identical lows — a down candle then an up candle: the same price level got bought twice. A short-term double-tap of support.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        return p.bear && b.bull && Math.abs(b.l - p.l) / p.l < 0.0025 && inDowntrend(s, i - 1)
+          ? `matching lows near $${b.l.toFixed(2)}` : null;
+      },
+    },
+    {
+      id: 'tweezer-top', name: 'Tweezer top', side: 'bear', weight: 1,
+      blurb: 'Two candles with nearly identical highs — an up candle then a down candle: the same level got sold twice. A short-term double-tap of resistance.',
+      check: (s, i) => {
+        const b = bar(s, i), p = bar(s, i - 1);
+        return p.bull && b.bear && Math.abs(b.h - p.h) / p.h < 0.0025 && inUptrend(s, i - 1)
+          ? `matching highs near $${b.h.toFixed(2)}` : null;
+      },
+    },
+    {
+      id: 'doji', name: 'Doji', side: 'neutral', weight: 0, span: 1,
+      blurb: 'Open and close nearly equal: a stand-off between buyers and sellers. After a strong trend, indecision itself is information — the side that was winning stopped winning.',
+      check: (s, i) => {
+        const b = bar(s, i);
+        return b.range > 0 && b.body <= 0.1 * b.range ? 'open and close nearly equal' : null;
+      },
+    },
+  ];
+
+  /* Scan the last `span` completed bars, newest first. */
   function scanRecent(s, det, span = 3) {
     const n = s.closes.length;
     for (let ago = 0; ago < span; ago++) {
@@ -37,6 +204,18 @@ const Signals = (() => {
     return null;
   }
 
+  /* All candle patterns present at bar i — used by the chart pattern tool. */
+  function candlesAt(s, i) {
+    if (i < 3) return [];
+    const out = [];
+    for (const c of CANDLE_CHECKS) {
+      let note = null;
+      try { note = c.check(s, i); } catch (_) { /* edge bars */ }
+      if (note) out.push({ id: c.id, name: c.name, side: c.side });
+    }
+    return out;
+  }
+
   /* ---------- chart-pattern helpers ---------- */
 
   function recentPivots(s, window = 180, w = 4) {
@@ -45,21 +224,103 @@ const Signals = (() => {
     return I.pivots(s.closes.slice(start), w).map(p => ({ ...p, i: p.i + start }));
   }
 
-  function trendlines(s, window = 60) {
+  function hlPivots(s, window, w = 3) {
     const n = s.closes.length;
-    const start = n - window;
-    const highs = [], lows = [];
-    for (const p of I.pivots(s.highs.slice(start), 3)) if (p.type === 'H') highs.push({ i: p.i, v: p.v });
-    for (const p of I.pivots(s.lows.slice(start), 3))  if (p.type === 'L') lows.push({ i: p.i, v: p.v });
+    const start = Math.max(0, n - window);
+    const highs = I.pivots(s.highs.slice(start), w).filter(p => p.type === 'H').map(p => ({ i: p.i + start, v: p.v }));
+    const lows  = I.pivots(s.lows.slice(start), w).filter(p => p.type === 'L').map(p => ({ i: p.i + start, v: p.v }));
+    return { highs, lows };
+  }
+
+  function trendlines(s, window = 60) {
+    const { highs, lows } = hlPivots(s, window);
     if (highs.length < 2 || lows.length < 2) return null;
     return { hSlope: I.slope(highs), lSlope: I.slope(lows), nH: highs.length, nL: lows.length };
+  }
+
+  /* Geometry for the double top/bottom actually detected (or null). */
+  function doubleGeometry(s, kind) {
+    const piv = recentPivots(s);
+    const [a, b, c] = kind === 'bottom' ? ['L', 'H', 'L'] : ['H', 'L', 'H'];
+    for (let k = piv.length - 1; k >= 2; k--) {
+      const p3 = piv[k], p2 = piv[k - 1], p1 = piv[k - 2];
+      if (p1.type !== a || p2.type !== b || p3.type !== c) continue;
+      if (s.closes.length - 1 - p3.i > 40) break;
+      const match = Math.abs(p3.v - p1.v) / p1.v < 0.035;
+      const sep = kind === 'bottom' ? p2.v > Math.max(p1.v, p3.v) * 1.03 : p2.v < Math.min(p1.v, p3.v) * 0.97;
+      if (match && sep) return { points: [p1, p2, p3], neckline: p2.v };
+    }
+    return null;
+  }
+
+  /* Geometry for head & shoulders / inverse (or null). */
+  function hsGeometry(s, inverse) {
+    const piv = recentPivots(s).filter(p => p.type === (inverse ? 'L' : 'H'));
+    if (piv.length < 3) return null;
+    const [p1, head, p3] = piv.slice(-3);
+    if (s.closes.length - 1 - p3.i > 40) return null;
+    const ok = inverse
+      ? head.v < p1.v * 0.96 && head.v < p3.v * 0.96 && Math.abs(p3.v - p1.v) / p1.v < 0.06
+      : head.v > p1.v * 1.04 && head.v > p3.v * 1.04 && Math.abs(p3.v - p1.v) / p1.v < 0.06;
+    return ok ? { points: [p1, head, p3], neckline: (p1.v + p3.v) / 2 } : null;
+  }
+
+  /* Support/resistance: cluster pivot highs+lows within 1.5%, keep levels
+     with 2+ touches, return the few nearest the current price. */
+  function srLevels(s, window = 120, maxLevels = 5) {
+    const { highs, lows } = hlPivots(s, window);
+    const pts = [...highs, ...lows].sort((x, y) => x.v - y.v);
+    const clusters = [];
+    for (const p of pts) {
+      const c = clusters[clusters.length - 1];
+      if (c && (p.v - c.max) / c.max < 0.015) { c.sum += p.v; c.n++; c.max = Math.max(c.max, p.v); }
+      else clusters.push({ sum: p.v, n: 1, max: p.v });
+    }
+    return clusters
+      .filter(c => c.n >= 2)
+      .map(c => ({ level: c.sum / c.n, touches: c.n }))
+      .sort((x, y) => Math.abs(x.level - s.price) - Math.abs(y.level - s.price))
+      .slice(0, maxLevels);
+  }
+
+  /* Everything the chart pattern tool can draw, for the visible window. */
+  function overlays(s, window = 63) {
+    const n = s.closes.length;
+    const start = n - window;
+    const { highs, lows } = hlPivots(s, window);
+    const fit = (pts) => {
+      if (pts.length < 2) return null;
+      // least-squares line through the pivots, evaluated at window edges
+      let sx = 0, sy = 0, sxy = 0, sxx = 0;
+      for (const p of pts) { sx += p.i; sy += p.v; sxy += p.i * p.v; sxx += p.i * p.i; }
+      const N = pts.length, denom = N * sxx - sx * sx;
+      if (denom === 0) return null;
+      const m = (N * sxy - sx * sy) / denom, b = (sy - m * sx) / N;
+      return { i1: start, v1: m * start + b, i2: n - 1, v2: m * (n - 1) + b };
+    };
+    const patterns = [];
+    const db = doubleGeometry(s, 'bottom');
+    if (db) patterns.push({ name: 'Double bottom', side: 'bull', ...db });
+    const dt = doubleGeometry(s, 'top');
+    if (dt) patterns.push({ name: 'Double top', side: 'bear', ...dt });
+    const hs = hsGeometry(s, false);
+    if (hs) patterns.push({ name: 'Head & shoulders', side: 'bear', ...hs });
+    const ihs = hsGeometry(s, true);
+    if (ihs) patterns.push({ name: 'Inverse head & shoulders', side: 'bull', ...ihs });
+
+    return {
+      pivotHighs: highs,
+      pivotLows: lows,
+      trendHigh: fit(highs),
+      trendLow: fit(lows),
+      levels: srLevels(s),
+      patterns,
+    };
   }
 
   /* ---------- divergence ---------- */
 
   function divergence(s, kind) {
-    // compare the two most recent price pivot lows (bull) or highs (bear)
-    // against the oscillator at the same bars
     const n = s.closes.length;
     const piv = recentPivots(s, 60, 3).filter(p => p.type === (kind === 'bull' ? 'L' : 'H'));
     if (piv.length < 2) return null;
@@ -393,227 +654,48 @@ const Signals = (() => {
       detect: s => last(s.mfiSeries) != null && last(s.mfiSeries) > 80 ? `MFI ${last(s.mfiSeries).toFixed(0)}` : null,
     },
 
-    /* ================= CANDLESTICKS ================= */
-    {
-      id: 'hammer', name: 'Hammer', cat: 'Candlesticks', side: 'bull', weight: 1,
-      blurb: 'A small body with a long lower shadow after a decline: sellers pushed hard intraday, but buyers slammed it back up by the close. A one-bar hint that the low is being defended.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i);
-        return inDowntrend(s, i) && b.lower >= 2 * b.body && b.upper <= 0.4 * b.body + 0.05 * b.range && b.body > 0
-          ? 'long lower shadow after a decline' : null;
-      }),
-    },
-    {
-      id: 'hanging-man', name: 'Hanging man', cat: 'Candlesticks', side: 'bear', weight: 1,
-      blurb: 'The same shape as a hammer, but after a rise: the intraday dumping shows sellers are getting active even though the close recovered. A warning shot at the top.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i);
-        return inUptrend(s, i) && b.lower >= 2 * b.body && b.upper <= 0.4 * b.body + 0.05 * b.range && b.body > 0
-          ? 'hammer shape after a rise — intraday selling appeared' : null;
-      }),
-    },
-    {
-      id: 'inverted-hammer', name: 'Inverted hammer', cat: 'Candlesticks', side: 'bull', weight: 1,
-      blurb: 'A small body with a long upper shadow after a decline: buyers probed higher. Needs confirmation from the next candle, but it\'s an early bottoming tell.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i);
-        return inDowntrend(s, i) && b.upper >= 2 * b.body && b.lower <= 0.4 * b.body + 0.05 * b.range && b.body > 0
-          ? 'long upper shadow after a decline' : null;
-      }),
-    },
-    {
-      id: 'shooting-star', name: 'Shooting star', cat: 'Candlesticks', side: 'bear', weight: 1,
-      blurb: 'A long upper shadow after a rise: buyers pushed to new highs intraday and got rejected hard. One of the most-watched single-bar topping signals.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i);
-        return inUptrend(s, i) && b.upper >= 2 * b.body && b.lower <= 0.4 * b.body + 0.05 * b.range && b.body > 0
-          ? 'high rejected with a long upper shadow' : null;
-      }),
-    },
-    {
-      id: 'bull-engulf', name: 'Bullish engulfing', cat: 'Candlesticks', side: 'bull', weight: 2,
-      blurb: 'A big up candle whose body completely swallows the prior down candle\'s body: buyers overwhelmed everything sellers did the day before. Strongest after a decline.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        return p.bear && b.bull && b.o <= p.c && b.c >= p.o && b.body > p.body
-          ? 'up candle engulfed the prior down candle' : null;
-      }),
-    },
-    {
-      id: 'bear-engulf', name: 'Bearish engulfing', cat: 'Candlesticks', side: 'bear', weight: 2,
-      blurb: 'A big down candle that swallows the prior up candle\'s body: sellers erased the previous day\'s optimism and then some. Strongest after a rise.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        return p.bull && b.bear && b.o >= p.c && b.c <= p.o && b.body > p.body
-          ? 'down candle engulfed the prior up candle' : null;
-      }),
-    },
-    {
-      id: 'bull-harami', name: 'Bullish harami', cat: 'Candlesticks', side: 'bull', weight: 1,
-      blurb: 'A small up candle tucked inside the prior big down candle\'s body: the selling wave paused. Mild by itself — watch what follows.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        return p.bear && b.bull && b.o > p.c && b.c < p.o && p.body > b.body * 1.6
-          ? 'small up candle inside the prior down candle' : null;
-      }),
-    },
-    {
-      id: 'bear-harami', name: 'Bearish harami', cat: 'Candlesticks', side: 'bear', weight: 1,
-      blurb: 'A small down candle inside the prior big up candle\'s body: the buying wave paused — momentum hesitation after a run-up.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        return p.bull && b.bear && b.o < p.c && b.c > p.o && p.body > b.body * 1.6
-          ? 'small down candle inside the prior up candle' : null;
-      }),
-    },
-    {
-      id: 'piercing-line', name: 'Piercing line', cat: 'Candlesticks', side: 'bull', weight: 1,
-      blurb: 'After a down candle, the next opens lower but rallies to close above the midpoint of the previous body: dip-buyers reclaimed more than half the lost ground.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        const mid = (p.o + p.c) / 2;
-        return p.bear && b.bull && b.o < p.c && b.c > mid && b.c < p.o
-          ? 'gap down reversed to close above the prior midpoint' : null;
-      }),
-    },
-    {
-      id: 'dark-cloud', name: 'Dark cloud cover', cat: 'Candlesticks', side: 'bear', weight: 1,
-      blurb: 'After an up candle, the next opens higher but sells off to close below the midpoint of the previous body: the morning\'s optimism got sold hard.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        const mid = (p.o + p.c) / 2;
-        return p.bull && b.bear && b.o > p.c && b.c < mid && b.c > p.o
-          ? 'gap up reversed to close below the prior midpoint' : null;
-      }),
-    },
-    {
-      id: 'morning-star', name: 'Morning star', cat: 'Candlesticks', side: 'bull', weight: 2,
-      blurb: 'Three bars: a big down candle, a small indecision candle, then a big up candle closing well into the first one\'s body. A classic three-act bottom: capitulation → pause → reversal.',
-      detect: s => scanRecent(s, i => {
-        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
-        return a.bear && a.body > 0.5 * a.range && m.body < 0.5 * a.body &&
-               b.bull && b.c > (a.o + a.c) / 2
-          ? 'down candle → pause → strong up candle' : null;
-      }),
-    },
-    {
-      id: 'evening-star', name: 'Evening star', cat: 'Candlesticks', side: 'bear', weight: 2,
-      blurb: 'Three bars: a big up candle, a small indecision candle, then a big down candle closing well into the first one\'s body. The three-act top: euphoria → pause → reversal.',
-      detect: s => scanRecent(s, i => {
-        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
-        return a.bull && a.body > 0.5 * a.range && m.body < 0.5 * a.body &&
-               b.bear && b.c < (a.o + a.c) / 2
-          ? 'up candle → pause → strong down candle' : null;
-      }),
-    },
-    {
-      id: 'three-soldiers', name: 'Three white soldiers', cat: 'Candlesticks', side: 'bull', weight: 2,
-      blurb: 'Three consecutive solid up candles, each closing higher: steady, methodical buying across three sessions — one of the strongest short-term continuation patterns.',
-      detect: s => scanRecent(s, i => {
-        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
-        return a.bull && m.bull && b.bull &&
-               m.c > a.c && b.c > m.c &&
-               a.body > 0.5 * a.range && m.body > 0.5 * m.range && b.body > 0.5 * b.range
-          ? 'three solid up candles in a row' : null;
-      }, 1),
-    },
-    {
-      id: 'three-crows', name: 'Three black crows', cat: 'Candlesticks', side: 'bear', weight: 2,
-      blurb: 'Three consecutive solid down candles, each closing lower: persistent selling with no real bounce — a strong short-term bearish pattern.',
-      detect: s => scanRecent(s, i => {
-        const a = bar(s, i - 2), m = bar(s, i - 1), b = bar(s, i);
-        return a.bear && m.bear && b.bear &&
-               m.c < a.c && b.c < m.c &&
-               a.body > 0.5 * a.range && m.body > 0.5 * m.range && b.body > 0.5 * b.range
-          ? 'three solid down candles in a row' : null;
-      }, 1),
-    },
-    {
-      id: 'tweezer-bottom', name: 'Tweezer bottom', cat: 'Candlesticks', side: 'bull', weight: 1,
-      blurb: 'Two candles with nearly identical lows — a down candle then an up candle: the same price level got bought twice. A short-term double-tap of support.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        return p.bear && b.bull && Math.abs(b.l - p.l) / p.l < 0.0025 && inDowntrend(s, i - 1)
-          ? `matching lows near $${b.l.toFixed(2)}` : null;
-      }),
-    },
-    {
-      id: 'tweezer-top', name: 'Tweezer top', cat: 'Candlesticks', side: 'bear', weight: 1,
-      blurb: 'Two candles with nearly identical highs — an up candle then a down candle: the same level got sold twice. A short-term double-tap of resistance.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i), p = bar(s, i - 1);
-        return p.bull && b.bear && Math.abs(b.h - p.h) / p.h < 0.0025 && inUptrend(s, i - 1)
-          ? `matching highs near $${b.h.toFixed(2)}` : null;
-      }),
-    },
-    {
-      id: 'doji', name: 'Doji', cat: 'Candlesticks', side: 'neutral', weight: 0,
-      blurb: 'Open and close nearly equal: a stand-off between buyers and sellers. After a strong trend, indecision itself is information — the side that was winning stopped winning.',
-      detect: s => scanRecent(s, i => {
-        const b = bar(s, i);
-        return b.range > 0 && b.body <= 0.1 * b.range ? 'open and close nearly equal' : null;
-      }, 1),
-    },
+    /* ================= CANDLESTICKS (from the shared check table) ================= */
+    ...CANDLE_CHECKS.map(c => ({
+      id: c.id, name: c.name, cat: 'Candlesticks', side: c.side, weight: c.weight,
+      blurb: c.blurb,
+      detect: s => scanRecent(s, i => c.check(s, i), c.span ?? 3),
+    })),
 
     /* ================= CHART PATTERNS ================= */
     {
       id: 'double-bottom', name: 'Double bottom', cat: 'Chart patterns', side: 'bull', weight: 3,
       blurb: 'Price hits the same low twice with a bounce between (a "W"): sellers failed at the same level twice. Confirmed when price breaks above the middle peak (the neckline).',
       detect: s => {
-        const piv = recentPivots(s);
-        for (let k = piv.length - 1; k >= 2; k--) {
-          const p3 = piv[k], p2 = piv[k - 1], p1 = piv[k - 2];
-          if (p1.type !== 'L' || p2.type !== 'H' || p3.type !== 'L') continue;
-          if (s.closes.length - 1 - p3.i > 40) break;
-          if (Math.abs(p3.v - p1.v) / p1.v < 0.035 && p2.v > Math.max(p1.v, p3.v) * 1.03) {
-            const status = s.price > p2.v ? 'confirmed — price broke the neckline' : 'forming — neckline not broken yet';
-            return `two lows near $${p3.v.toFixed(2)}, ${status}`;
-          }
-        }
-        return null;
+        const g = doubleGeometry(s, 'bottom');
+        if (!g) return null;
+        const status = s.price > g.neckline ? 'confirmed — price broke the neckline' : 'forming — neckline not broken yet';
+        return `two lows near $${g.points[2].v.toFixed(2)}, ${status}`;
       },
     },
     {
       id: 'double-top', name: 'Double top', cat: 'Chart patterns', side: 'bear', weight: 3,
       blurb: 'Price hits the same high twice with a dip between (an "M"): buyers failed at the same level twice. Confirmed when price breaks below the middle dip.',
       detect: s => {
-        const piv = recentPivots(s);
-        for (let k = piv.length - 1; k >= 2; k--) {
-          const p3 = piv[k], p2 = piv[k - 1], p1 = piv[k - 2];
-          if (p1.type !== 'H' || p2.type !== 'L' || p3.type !== 'H') continue;
-          if (s.closes.length - 1 - p3.i > 40) break;
-          if (Math.abs(p3.v - p1.v) / p1.v < 0.035 && p2.v < Math.min(p1.v, p3.v) * 0.97) {
-            const status = s.price < p2.v ? 'confirmed — price broke the neckline' : 'forming — neckline not broken yet';
-            return `two highs near $${p3.v.toFixed(2)}, ${status}`;
-          }
-        }
-        return null;
+        const g = doubleGeometry(s, 'top');
+        if (!g) return null;
+        const status = s.price < g.neckline ? 'confirmed — price broke the neckline' : 'forming — neckline not broken yet';
+        return `two highs near $${g.points[2].v.toFixed(2)}, ${status}`;
       },
     },
     {
       id: 'inv-head-shoulders', name: 'Inverse head & shoulders', cat: 'Chart patterns', side: 'bull', weight: 3,
       blurb: 'Three troughs with the middle one deepest: the final low is higher than the "head" — sellers are losing their grip. Confirmed on a break above the neckline. One of the most reliable reversal patterns.',
       detect: s => {
-        const lows = recentPivots(s).filter(p => p.type === 'L');
-        if (lows.length < 3) return null;
-        const [l1, head, l3] = lows.slice(-3);
-        if (s.closes.length - 1 - l3.i > 40) return null;
-        if (head.v < l1.v * 0.96 && head.v < l3.v * 0.96 && Math.abs(l3.v - l1.v) / l1.v < 0.06)
-          return `head at $${head.v.toFixed(2)} with higher shoulders either side`;
-        return null;
+        const g = hsGeometry(s, true);
+        return g ? `head at $${g.points[1].v.toFixed(2)} with higher shoulders either side` : null;
       },
     },
     {
       id: 'head-shoulders', name: 'Head & shoulders', cat: 'Chart patterns', side: 'bear', weight: 3,
       blurb: 'Three peaks with the middle one tallest: the last rally failed to reach the "head" — buyers are exhausting. Confirmed on a break below the neckline. The most famous topping pattern in charting.',
       detect: s => {
-        const highs = recentPivots(s).filter(p => p.type === 'H');
-        if (highs.length < 3) return null;
-        const [h1, head, h3] = highs.slice(-3);
-        if (s.closes.length - 1 - h3.i > 40) return null;
-        if (head.v > h1.v * 1.04 && head.v > h3.v * 1.04 && Math.abs(h3.v - h1.v) / h1.v < 0.06)
-          return `head at $${head.v.toFixed(2)} with lower shoulders either side`;
-        return null;
+        const g = hsGeometry(s, false);
+        return g ? `head at $${g.points[1].v.toFixed(2)} with lower shoulders either side` : null;
       },
     },
     {
@@ -699,5 +781,5 @@ const Signals = (() => {
 
   const CATEGORIES = ['Momentum', 'Trend', 'Volatility & bands', 'Volume', 'Candlesticks', 'Chart patterns'];
 
-  return { DEFS, evaluate, CATEGORIES };
+  return { DEFS, evaluate, CATEGORIES, candlesAt, overlays };
 })();

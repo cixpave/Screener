@@ -23,8 +23,8 @@
     const next = cur === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = next;
     localStorage.setItem('pulse.theme', next);
-    renderScreener(); // sparkline colors
-    if (openTicker) openDrawer(openTicker); // re-render charts with new palette
+    renderScreener();
+    if (openTicker) renderDrawer(openTicker);
   });
 
   /* ================= tabs ================= */
@@ -32,6 +32,7 @@
   $$('.tab').forEach(tab => tab.addEventListener('click', () => {
     $$('.tab').forEach(t => { t.classList.toggle('is-active', t === tab); t.setAttribute('aria-selected', t === tab); });
     $$('.view').forEach(v => v.classList.toggle('is-active', v.id === 'view-' + tab.dataset.view));
+    if (tab.dataset.view === 'learn') renderLearn();
   }));
 
   /* ================= tip bar ================= */
@@ -53,7 +54,7 @@
       popover.innerHTML = `<h4>${term.title}</h4><p>${term.body}</p>`;
       popover.hidden = false;
       const r = btn.getBoundingClientRect();
-      popover.style.left = Math.min(r.left, innerWidth - 320) + scrollX + 'px';
+      popover.style.left = Math.max(8, Math.min(r.left, innerWidth - 320)) + scrollX + 'px';
       popover.style.top = r.bottom + 8 + scrollY + 'px';
       return;
     }
@@ -62,7 +63,8 @@
 
   /* ================= screener ================= */
 
-  const state = { preset: 'all', sector: '', search: '', signal: '', sortKey: 'ticker', sortDir: 1 };
+  const PAGE_SIZE = 60;
+  const state = { preset: 'all', sector: '', search: '', signal: '', sortKey: 'ticker', sortDir: 1, page: 1 };
 
   // populate sector filter + ticker datalist + signal filter
   const sectors = [...new Set(MarketData.STOCKS.map(s => s.sector))].sort();
@@ -149,7 +151,7 @@
     macdState: s => (s.cross ? (s.cross.type === 'bull' ? 3 : 0) : (s.macd > s.signal ? 2 : 1)),
   };
 
-  function renderScreener() {
+  function filteredRows() {
     let rows = MarketData.STOCKS.filter(PRESETS[state.preset]);
     if (state.sector) rows = rows.filter(s => s.sector === state.sector);
     if (state.signal) rows = rows.filter(s => s.sig.fired.some(f => f.id === state.signal));
@@ -162,42 +164,60 @@
       const va = acc(a), vb = acc(b);
       return (va < vb ? -1 : va > vb ? 1 : 0) * state.sortDir;
     });
+    return rows;
+  }
 
-    $('#screener-body').innerHTML = rows.map(s => `
+  function renderScreener() {
+    const rows = filteredRows();
+    const shown = rows.slice(0, state.page * PAGE_SIZE);
+
+    $('#screener-body').innerHTML = shown.map(s => `
       <tr data-ticker="${s.t}">
-        <td class="sym">${s.t}</td>
+        <td class="sym">${s.t}${s.liveQuote ? ' <span class="live-badge" title="Live quote"></span>' : ''}</td>
         <td class="co-name col-name">${s.name}</td>
         <td class="num">${fmtUsd(s.price)}</td>
         <td class="num ${s.chg >= 0 ? 'delta-up' : 'delta-down'}">${arrow(s.chg)} ${fmtPct(Math.abs(s.chg), false)}</td>
         <td class="num">${rsiCell(s)}</td>
-        <td>${macdCell(s)}</td>
+        <td class="col-macd">${macdCell(s)}</td>
         <td class="col-bias">${biasCell(s)}</td>
         <td class="col-spark">${sparkline(s.closes)}</td>
       </tr>`).join('');
 
     $('#screener-empty').hidden = rows.length > 0;
+    $('#result-count').textContent = rows.length
+      ? `Showing ${shown.length} of ${rows.length} stocks (S&P 500)` : '';
+    $('#load-more').hidden = shown.length >= rows.length;
 
     $$('th[data-sort]').forEach(th => {
       th.classList.toggle('sorted-asc',  th.dataset.sort === state.sortKey && state.sortDir === 1);
       th.classList.toggle('sorted-desc', th.dataset.sort === state.sortKey && state.sortDir === -1);
     });
+
+    // live layer refreshes what the user is actually looking at first
+    LiveData.setPriority([...new Set([...holdings.map(h => h.t), ...shown.slice(0, 120).map(s => s.t)])]);
   }
+
+  const resetPage = () => { state.page = 1; };
+
+  $('#load-more').addEventListener('click', () => { state.page++; renderScreener(); });
 
   $('#presets').addEventListener('click', e => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
     state.preset = chip.dataset.preset;
+    resetPage();
     $$('#presets .chip').forEach(c => c.classList.toggle('is-active', c === chip));
     renderScreener();
   });
-  $('#sector-filter').addEventListener('change', e => { state.sector = e.target.value; renderScreener(); });
-  $('#signal-filter').addEventListener('change', e => { state.signal = e.target.value; renderScreener(); });
-  $('#search').addEventListener('input', e => { state.search = e.target.value.trim(); renderScreener(); });
+  $('#sector-filter').addEventListener('change', e => { state.sector = e.target.value; resetPage(); renderScreener(); });
+  $('#signal-filter').addEventListener('change', e => { state.signal = e.target.value; resetPage(); renderScreener(); });
+  $('#search').addEventListener('input', e => { state.search = e.target.value.trim(); resetPage(); renderScreener(); });
   $('#screener-table thead').addEventListener('click', e => {
     const th = e.target.closest('th[data-sort]');
     if (!th || e.target.closest('.info-btn')) return;
     if (state.sortKey === th.dataset.sort) state.sortDir *= -1;
     else { state.sortKey = th.dataset.sort; state.sortDir = 1; }
+    resetPage();
     renderScreener();
   });
   $('#screener-body').addEventListener('click', e => {
@@ -218,13 +238,50 @@
   const SHOW_BARS = 126;   // ~6 months for oscillator panes
   const CANDLE_BARS = 63;  // ~3 months for the candle pane
 
-  /* Candlestick pane: candles + SMA20/50 + Bollinger wash + volume strip. */
+  /* Pattern tool toggles (persisted) */
+  let patternTools = { swings: false, trendlines: false, levels: false, patterns: true, candles: true };
+  try { patternTools = { ...patternTools, ...JSON.parse(localStorage.getItem('pulse.ptools') || '{}') }; } catch (_) {}
+
+  function syncToolChips() {
+    $$('#pattern-tools .chip').forEach(c =>
+      c.classList.toggle('is-active', !!patternTools[c.dataset.tool]));
+  }
+  $('#pattern-tools').addEventListener('click', e => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    patternTools[chip.dataset.tool] = !patternTools[chip.dataset.tool];
+    localStorage.setItem('pulse.ptools', JSON.stringify(patternTools));
+    syncToolChips();
+    if (openTicker) drawCandles($('#chart-price'), MarketData.BY_TICKER[openTicker]);
+  });
+
+  /* Shared hover/touch wiring for a chart pane. */
+  function wireCrosshair(el, svgW, handler) {
+    const svgEl = el.querySelector('svg'), tip = el.querySelector('.chart-tip'), xh = el.querySelector('#xhair');
+    const move = e => {
+      const rect = svgEl.getBoundingClientRect();
+      const sx = (e.clientX - rect.left) / rect.width * svgW;
+      handler(sx, e.clientY - rect.top, rect, tip, xh);
+    };
+    svgEl.addEventListener('pointermove', move);
+    svgEl.addEventListener('pointerdown', move);
+    // touch keeps the crosshair up after the finger lifts; mouse clears on exit
+    svgEl.addEventListener('pointerleave', e => {
+      if (e.pointerType !== 'mouse') return;
+      tip.hidden = true; xh.setAttribute('opacity', '0');
+    });
+  }
+
+  /* Candlestick pane: candles + SMA20/50 + Bollinger wash + volume strip,
+     plus the pattern-tool overlays. */
   function drawCandles(el, s) {
     const N = CANDLE_BARS;
     const n0 = s.closes.length - N;
     const dates = MarketData.DATES.slice(-N);
-    const W = 520, H = 230, padL = 56, padR = 10, padT = 8, padB = 20, volH = 30;
+    const W = 520, H = 240, padL = 56, padR = 44, padT = 8, padB = 20, volH = 30;
     const plotB = H - padB - volH - 4;
+
+    const ov = Signals.overlays(s, N);
 
     let lo = Infinity, hi = -Infinity;
     for (let i = 0; i < N; i++) {
@@ -233,46 +290,44 @@
       hi = Math.max(hi, s.highs[gi], s.bb.upper[gi] ?? -Infinity);
     }
     const range = hi - lo || 1;
-    lo -= range * 0.04; hi += range * 0.04;
+    lo -= range * 0.05; hi += range * 0.05;
 
-    const x = i => padL + (i + 0.5) * (W - padL - padR) / N;
+    const x = i => padL + (i - n0 + 0.5) * (W - padL - padR) / N;  // takes GLOBAL index
     const y = v => padT + (hi - v) / (hi - lo) * (plotB - padT);
     const slot = (W - padL - padR) / N;
     const bw = Math.max(Math.min(slot * 0.65, 9), 2);
 
     const up = cssVar('--up'), down = cssVar('--down');
     const s1 = cssVar('--series-1'), s2 = cssVar('--series-2');
-    const gridColor = cssVar('--grid'), mutedColor = cssVar('--muted');
+    const accent = cssVar('--accent');
+    const gridColor = cssVar('--grid'), mutedColor = cssVar('--muted'), inkColor = cssVar('--ink-2');
 
-    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" style="touch-action: pan-y">`;
 
-    // grid + y labels
     for (const tv of [lo + range * 0.08, (lo + hi) / 2, hi - range * 0.08]) {
       svg += `<line x1="${padL}" y1="${y(tv)}" x2="${W - padR}" y2="${y(tv)}" stroke="${gridColor}" stroke-width="1"/>`;
       svg += `<text x="${padL - 6}" y="${y(tv) + 3.5}" text-anchor="end" font-size="10" fill="${mutedColor}">$${tv.toFixed(2)}</text>`;
     }
-    // month labels
     let lastMonth = -1;
     for (let i = 0; i < N; i++) {
       if (dates[i].getMonth() !== lastMonth) {
         lastMonth = dates[i].getMonth();
         if (i > 2 && i < N - 4)
-          svg += `<text x="${x(i)}" y="${H - 5}" font-size="10" fill="${mutedColor}">${dates[i].toLocaleString('en-US', { month: 'short' })}</text>`;
+          svg += `<text x="${x(n0 + i)}" y="${H - 5}" font-size="10" fill="${mutedColor}">${dates[i].toLocaleString('en-US', { month: 'short' })}</text>`;
       }
     }
 
     // Bollinger band wash + edges
     const bandTop = [], bandBot = [];
-    for (let i = 0; i < N; i++) {
-      const gi = n0 + i;
+    for (let gi = n0; gi < n0 + N; gi++) {
       if (s.bb.upper[gi] != null) {
-        bandTop.push([x(i), y(s.bb.upper[gi])]);
-        bandBot.push([x(i), y(s.bb.lower[gi])]);
+        bandTop.push([x(gi), y(s.bb.upper[gi])]);
+        bandBot.push([x(gi), y(s.bb.lower[gi])]);
       }
     }
     if (bandTop.length > 1) {
       const p = pts => pts.map((q, i) => (i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('');
-      svg += `<path d="${p(bandTop)} ${bandBot.slice().reverse().map(q => 'L' + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('')} Z" fill="${cssVar('--accent')}" opacity="0.06"/>`;
+      svg += `<path d="${p(bandTop)} ${bandBot.slice().reverse().map(q => 'L' + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('')} Z" fill="${accent}" opacity="0.06"/>`;
       svg += `<path d="${p(bandTop)}" fill="none" stroke="${mutedColor}" stroke-width="1" opacity="0.5"/>`;
       svg += `<path d="${p(bandBot)}" fill="none" stroke="${mutedColor}" stroke-width="1" opacity="0.5"/>`;
     }
@@ -280,54 +335,119 @@
     // SMA lines
     for (const [series, color] of [[s.sma20, s1], [s.sma50, s2]]) {
       const pts = [];
-      for (let i = 0; i < N; i++) {
-        const v = series[n0 + i];
-        if (v != null) pts.push([x(i), y(v)]);
-      }
+      for (let gi = n0; gi < n0 + N; gi++)
+        if (series[gi] != null) pts.push([x(gi), y(series[gi])]);
       if (pts.length > 1)
         svg += `<path d="${pts.map((q, i) => (i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
     }
 
     // volume strip
     let maxVol = 0;
-    for (let i = 0; i < N; i++) maxVol = Math.max(maxVol, s.volumes[n0 + i]);
-    for (let i = 0; i < N; i++) {
-      const gi = n0 + i;
-      const vh = s.volumes[gi] / maxVol * volH;
+    for (let gi = n0; gi < n0 + N; gi++) maxVol = Math.max(maxVol, s.volumes[gi]);
+    for (let gi = n0; gi < n0 + N; gi++) {
+      const vh = maxVol ? s.volumes[gi] / maxVol * volH : 0;
       const col = s.closes[gi] >= s.opens[gi] ? up : down;
-      svg += `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${(H - padB - vh).toFixed(1)}" width="${bw.toFixed(1)}" height="${vh.toFixed(1)}" fill="${col}" opacity="0.35"/>`;
+      svg += `<rect x="${(x(gi) - bw / 2).toFixed(1)}" y="${(H - padB - vh).toFixed(1)}" width="${bw.toFixed(1)}" height="${vh.toFixed(1)}" fill="${col}" opacity="0.35"/>`;
     }
 
     // candles
-    for (let i = 0; i < N; i++) {
-      const gi = n0 + i;
+    for (let gi = n0; gi < n0 + N; gi++) {
       const o = s.opens[gi], c = s.closes[gi], h = s.highs[gi], l = s.lows[gi];
       const col = c >= o ? up : down;
-      const cx = x(i);
+      const cx = x(gi);
       svg += `<line x1="${cx.toFixed(1)}" y1="${y(h).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"/>`;
       const top = y(Math.max(o, c)), bh = Math.max(Math.abs(y(o) - y(c)), 1);
       svg += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}" rx="1"/>`;
     }
 
+    /* ---------- pattern-tool overlays ---------- */
+
+    const clampI = p => p.i >= n0 && p.i < n0 + N;
+
+    if (patternTools.levels) {
+      for (const lvl of ov.levels) {
+        if (lvl.level < lo || lvl.level > hi) continue;
+        svg += `<line x1="${padL}" y1="${y(lvl.level).toFixed(1)}" x2="${W - padR}" y2="${y(lvl.level).toFixed(1)}" stroke="${accent}" stroke-width="1" opacity="0.55"/>`;
+        svg += `<text x="${W - padR + 3}" y="${(y(lvl.level) + 3.5).toFixed(1)}" font-size="9" fill="${accent}">$${lvl.level.toFixed(0)} ×${lvl.touches}</text>`;
+      }
+    }
+
+    if (patternTools.trendlines) {
+      for (const [tl, col] of [[ov.trendHigh, down], [ov.trendLow, up]]) {
+        if (!tl) continue;
+        const yy1 = Math.max(padT, Math.min(plotB, y(tl.v1)));
+        const yy2 = Math.max(padT, Math.min(plotB, y(tl.v2)));
+        svg += `<line x1="${x(tl.i1).toFixed(1)}" y1="${yy1.toFixed(1)}" x2="${x(tl.i2).toFixed(1)}" y2="${yy2.toFixed(1)}" stroke="${col}" stroke-width="1.5" opacity="0.7"/>`;
+      }
+    }
+
+    if (patternTools.swings) {
+      for (const p of ov.pivotHighs.filter(clampI))
+        svg += `<circle cx="${x(p.i).toFixed(1)}" cy="${(y(p.v) - 6).toFixed(1)}" r="3" fill="none" stroke="${down}" stroke-width="1.5"/>`;
+      for (const p of ov.pivotLows.filter(clampI))
+        svg += `<circle cx="${x(p.i).toFixed(1)}" cy="${(y(p.v) + 6).toFixed(1)}" r="3" fill="none" stroke="${up}" stroke-width="1.5"/>`;
+    }
+
+    if (patternTools.patterns) {
+      for (const pat of ov.patterns) {
+        const pts = pat.points.filter(clampI);
+        if (!pts.length) continue;
+        const col = pat.side === 'bull' ? up : down;
+        // neckline
+        if (pat.neckline >= lo && pat.neckline <= hi) {
+          const x1 = x(Math.max(pat.points[0].i, n0)), x2 = W - padR;
+          svg += `<line x1="${x1.toFixed(1)}" y1="${y(pat.neckline).toFixed(1)}" x2="${x2}" y2="${y(pat.neckline).toFixed(1)}" stroke="${col}" stroke-width="1.5" opacity="0.8"/>`;
+          svg += `<text x="${x2 - 2}" y="${(y(pat.neckline) - 4).toFixed(1)}" text-anchor="end" font-size="9" fill="${inkColor}">neckline</text>`;
+        }
+        // anchor points + connecting path
+        svg += `<path d="${pts.map((p, i2) => (i2 ? 'L' : 'M') + x(p.i).toFixed(1) + ' ' + y(p.v).toFixed(1)).join('')}" fill="none" stroke="${col}" stroke-width="1.5" opacity="0.85"/>`;
+        for (const p of pts) {
+          svg += `<circle cx="${x(p.i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="5.5" fill="${cssVar('--surface')}"/>`;
+          svg += `<circle cx="${x(p.i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="3.5" fill="${col}"/>`;
+        }
+        const lp = pts[Math.floor(pts.length / 2)];
+        svg += `<text x="${x(lp.i).toFixed(1)}" y="${(y(lp.v) + (pat.side === 'bull' ? 18 : -12)).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="600" fill="${inkColor}">${pat.name}</text>`;
+      }
+    }
+
+    // per-candle pattern marks (and a map for the tooltip)
+    const candleMarks = {};
+    if (patternTools.candles) {
+      for (let gi = Math.max(n0, 3); gi < n0 + N; gi++) {
+        const found = Signals.candlesAt(s, gi);
+        if (!found.length) continue;
+        candleMarks[gi] = found;
+        const bullish = found.some(f => f.side === 'bull');
+        const bearish = found.some(f => f.side === 'bear');
+        if (bullish)
+          svg += `<text x="${x(gi).toFixed(1)}" y="${(y(s.lows[gi]) + 12).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="${up}">▲</text>`;
+        if (bearish)
+          svg += `<text x="${x(gi).toFixed(1)}" y="${(y(s.highs[gi]) - 5).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="${down}">▼</text>`;
+        if (!bullish && !bearish)
+          svg += `<text x="${x(gi).toFixed(1)}" y="${(y(s.highs[gi]) - 5).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="${mutedColor}">◆</text>`;
+      }
+    }
+
     svg += `<line id="xhair" x1="0" y1="${padT}" x2="0" y2="${H - padB}" stroke="${mutedColor}" stroke-width="1" opacity="0"/>`;
     svg += `</svg>`;
-    el.innerHTML = svg + `<div class="chart-tip" hidden></div>`;
 
-    const svgEl = el.querySelector('svg'), tip = el.querySelector('.chart-tip'), xh = el.querySelector('#xhair');
-    svgEl.addEventListener('mousemove', e => {
-      const rect = svgEl.getBoundingClientRect();
-      const sx = (e.clientX - rect.left) / rect.width * W;
+    // active pattern summary under the chart
+    const activePats = patternTools.patterns && ov.patterns.length
+      ? `<p class="pattern-note">Drawn on chart: ${ov.patterns.map(p => `${SIDE_GLYPH[p.side]} ${p.name} (neckline $${p.neckline.toFixed(2)})`).join(' · ')}</p>` : '';
+    el.innerHTML = svg + `<div class="chart-tip" hidden></div>` + activePats;
+
+    wireCrosshair(el, W, (sx, cy, rect, tip, xh) => {
       const i = Math.max(0, Math.min(N - 1, Math.floor((sx - padL) / slot)));
       const gi = n0 + i;
-      xh.setAttribute('x1', x(i)); xh.setAttribute('x2', x(i)); xh.setAttribute('opacity', '0.5');
+      xh.setAttribute('x1', x(gi)); xh.setAttribute('x2', x(gi)); xh.setAttribute('opacity', '0.5');
+      const marks = candleMarks[gi];
       tip.innerHTML = `<small>${dates[i].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</small> ` +
         `O ${s.opens[gi].toFixed(2)} · H ${s.highs[gi].toFixed(2)} · L ${s.lows[gi].toFixed(2)} · C ${s.closes[gi].toFixed(2)}` +
-        `<br><small>vol ${(s.volumes[gi] / 1e6).toFixed(1)}M</small>`;
+        `<br><small>vol ${(s.volumes[gi] / 1e6).toFixed(1)}M${marks ? ' · ' + marks.map(m => m.name).join(', ') : ''}</small>`;
       tip.hidden = false;
-      tip.style.left = (x(i) / W * rect.width) + 'px';
-      tip.style.top = (e.clientY - rect.top) + 'px';
+      tip.style.left = Math.max(70, Math.min(rect.width - 70, x(gi) / W * rect.width)) + 'px';
+      tip.style.top = cy + 'px';
     });
-    svgEl.addEventListener('mouseleave', () => { tip.hidden = true; xh.setAttribute('opacity', '0'); });
   }
 
   /* Generic single-pane SVG chart with crosshair + tooltip. */
@@ -352,7 +472,7 @@
 
     const gridColor = cssVar('--grid'), mutedColor = cssVar('--muted'), surface = cssVar('--surface');
 
-    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" style="touch-action: pan-y">`;
 
     const ticks = guides.length ? guides.map(g => g.y) : [lo + padRange, (lo + hi) / 2, hi - padRange];
     for (const tv of ticks) {
@@ -401,10 +521,7 @@
     svg += `</svg>`;
     el.innerHTML = svg + `<div class="chart-tip" hidden></div>`;
 
-    const svgEl = el.querySelector('svg'), tip = el.querySelector('.chart-tip'), xh = el.querySelector('#xhair');
-    svgEl.addEventListener('mousemove', e => {
-      const rect = svgEl.getBoundingClientRect();
-      const sx = (e.clientX - rect.left) / rect.width * W;
+    wireCrosshair(el, W, (sx, cy, rect, tip, xh) => {
       const i = Math.max(0, Math.min(n - 1, Math.round((sx - padL) / ((W - padL - padR) / (n - 1)))));
       xh.setAttribute('x1', x(i)); xh.setAttribute('x2', x(i)); xh.setAttribute('opacity', '0.5');
       const parts = [`<small>${dates[i].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</small>`];
@@ -412,10 +529,9 @@
       if (bars && bars.values[i] != null) parts.push(`hist ${fmt(bars.values[i])}`);
       tip.innerHTML = parts.join(' · ');
       tip.hidden = false;
-      tip.style.left = (x(i) / W * rect.width) + 'px';
-      tip.style.top = (e.clientY - rect.top) + 'px';
+      tip.style.left = Math.max(70, Math.min(rect.width - 70, x(i) / W * rect.width)) + 'px';
+      tip.style.top = cy + 'px';
     });
-    svgEl.addEventListener('mouseleave', () => { tip.hidden = true; xh.setAttribute('opacity', '0'); });
   }
 
   function signalsBlock(s) {
@@ -459,15 +575,14 @@
 
     notes.push(`<li><strong>Remember:</strong> signals stack. One indicator alone is a whisper; several agreeing (see the detected-signals box above) is a conversation worth having. None of them are guarantees.</li>`);
 
-    return `<h3>How to read this (demo data)</h3><ul>${notes.join('')}</ul>`;
+    return `<h3>How to read this (${s.liveHistory ? 'real daily data' : 'demo data'})</h3><ul>${notes.join('')}</ul>`;
   }
 
-  function openDrawer(ticker) {
+  function renderDrawer(ticker) {
     const s = MarketData.BY_TICKER[ticker];
     if (!s) return;
-    openTicker = ticker;
     $('#drawer-ticker').textContent = s.t;
-    $('#drawer-name').textContent = `${s.name} · ${s.sector}`;
+    $('#drawer-name').textContent = `${s.name} · ${s.sector} · ${s.liveHistory ? 'real daily candles' : s.liveQuote ? 'live quote, demo history' : 'demo data'}`;
     $('#drawer-price').textContent = fmtUsd(s.price);
     const chgEl = $('#drawer-chg');
     chgEl.textContent = `${arrow(s.chg)} ${fmtPct(Math.abs(s.chg), false)} today`;
@@ -476,6 +591,7 @@
     const s1 = cssVar('--series-1'), s2 = cssVar('--series-2');
     const up = cssVar('--up'), down = cssVar('--down');
 
+    syncToolChips();
     drawCandles($('#chart-price'), s);
 
     $('#drawer-signals').innerHTML = signalsBlock(s);
@@ -510,9 +626,20 @@
     });
 
     $('#drawer-read').innerHTML = readout(s);
+  }
+
+  function openDrawer(ticker) {
+    const s = MarketData.BY_TICKER[ticker];
+    if (!s) return;
+    openTicker = ticker;
+    renderDrawer(ticker);
     drawer.hidden = false;
     scrim.hidden = false;
     drawer.scrollTop = 0;
+    // upgrade to real candles if a history provider is configured
+    LiveData.ensureHistory(ticker, refreshed => {
+      if (refreshed && openTicker === ticker) renderDrawer(ticker);
+    });
   }
 
   /* ================= learn library ================= */
@@ -521,6 +648,7 @@
 
   function renderLearn() {
     const q = learnState.search.toLowerCase();
+    const examples = MarketData.signalExamples();
     let html = '';
     for (const cat of Signals.CATEGORIES) {
       const defs = Signals.DEFS.filter(d =>
@@ -530,7 +658,7 @@
       if (!defs.length) continue;
       html += `<div class="learn-cat"><h3>${cat}</h3><div class="learn-grid">` +
         defs.map(d => {
-          const fired = MarketData.SIGNAL_EXAMPLES[d.id] || [];
+          const fired = examples[d.id] || [];
           return `<div class="learn-card">
             <h4><span class="side-badge side-${d.side}">${SIDE_GLYPH[d.side]}</span>${d.name}</h4>
             <p>${d.blurb}</p>
@@ -623,7 +751,6 @@
       const s = MarketData.BY_TICKER[h.t];
       if (!s) continue;
 
-      // composite signal weather report
       if (s.sig.score >= 4) {
         const tops = s.sig.fired.filter(f => f.side === 'bull').sort((a, b) => b.weight - a.weight).slice(0, 3);
         cards.push(card(s.t, 'Signals stacking bullish', 'tag-up',
@@ -636,7 +763,6 @@
           'A pile-up of bearish signals doesn\'t force a sale, but it\'s the technical equivalent of several warning lights on at once. Decide your downside limit in advance.'));
       }
 
-      // marquee individual signals
       const fired = Object.fromEntries(s.sig.fired.map(f => [f.id, f]));
       if (fired['golden-cross']) cards.push(card(s.t, 'Golden cross', 'tag-up',
         `${s.t} just formed a golden cross — its 50-day average crossed above the 200-day. Historically one of the most respected long-term bullish signals; long-term holders generally sit tight through these.`,
@@ -780,29 +906,77 @@
 
   $('#events-mine-only').addEventListener('change', renderEvents);
 
-  /* ================= thinkorswim / Schwab connect ================= */
+  /* ================= live data ================= */
+
+  function renderBanner() {
+    const st = LiveData.status();
+    const el = $('#data-banner');
+    if (!st.live) {
+      el.textContent = 'Demo data — prices are simulated for learning. Open "Connect" to add a free API key for live S&P 500 quotes, or link thinkorswim.';
+      return;
+    }
+    const age = st.lastAt ? Math.max(0, Math.round((Date.now() - st.lastAt) / 1000)) : null;
+    el.innerHTML = `<span class="live-badge">LIVE</span> &nbsp;Quotes via ${st.provider} — ${st.updatedCount}/${MarketData.STOCKS.length} symbols refreshed${age != null ? `, last update ${age}s ago` : ''}${st.backoff ? ' (rate limit — pausing a minute)' : ''}${st.history ? ' · real candles load when you open a stock' : ''}.`;
+  }
+  setInterval(renderBanner, 5000);
+
+  // coalesce live-quote table refreshes: at most one repaint every 4s
+  let repaintQueued = false;
+  function queueRepaint() {
+    if (repaintQueued) return;
+    repaintQueued = true;
+    setTimeout(() => {
+      repaintQueued = false;
+      if ($('#view-screener').classList.contains('is-active')) renderScreener();
+      if ($('#view-portfolio').classList.contains('is-active')) renderPortfolio();
+    }, 4000);
+  }
+
+  LiveData.init({
+    onUpdate: t => {
+      renderBanner();
+      queueRepaint();
+      if (t && t === openTicker) renderDrawer(t);
+    },
+  });
+
+  /* ================= connect modal ================= */
 
   const modalScrim = $('#modal-scrim');
   const connState = () => JSON.parse(localStorage.getItem('pulse.schwab') || '{}');
 
   function renderConn() {
     const c = connState();
+    const live = LiveData.status().live;
     const on = !!c.authorized;
-    $('#conn-dot').classList.toggle('is-on', on);
-    $('#conn-label').textContent = on ? 'thinkorswim linked' : 'Connect thinkorswim';
-    $('#data-banner').textContent = on
-      ? 'Schwab app authorized — quote streaming requires the local proxy (see README). Displayed prices remain demo data.'
-      : 'Demo data — prices are simulated for learning. Connect a Schwab / thinkorswim account for live quotes.';
+    $('#conn-dot').classList.toggle('is-on', on || live);
+    $('#conn-label').textContent = on ? 'thinkorswim linked' : live ? 'Live data on' : 'Connect';
+    renderBanner();
   }
 
   $('#connect-btn').addEventListener('click', () => {
     const c = connState();
     if (c.key) $('#schwab-key').value = c.key;
     if (c.callback) $('#schwab-callback').value = c.callback;
+    const lk = LiveData.getKeys();
+    $('#finnhub-key').value = lk.finnhub || '';
+    $('#twelvedata-key').value = lk.twelvedata || '';
     modalScrim.hidden = false;
   });
   $('#modal-close').addEventListener('click', () => { modalScrim.hidden = true; });
   modalScrim.addEventListener('click', e => { if (e.target === modalScrim) modalScrim.hidden = true; });
+
+  $('#live-save').addEventListener('click', () => {
+    LiveData.setKeys({ finnhub: $('#finnhub-key').value, twelvedata: $('#twelvedata-key').value });
+    renderConn();
+    modalScrim.hidden = true;
+  });
+  $('#live-clear').addEventListener('click', () => {
+    LiveData.setKeys({ finnhub: '', twelvedata: '' });
+    $('#finnhub-key').value = '';
+    $('#twelvedata-key').value = '';
+    renderConn();
+  });
 
   $('#schwab-auth').addEventListener('click', () => {
     const key = $('#schwab-key').value.trim();
@@ -828,4 +1002,5 @@
   renderPortfolio();
   renderLearn();
   renderConn();
+  renderBanner();
 })();

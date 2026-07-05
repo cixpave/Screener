@@ -77,6 +77,16 @@ python3 -m http.server 8000
 
 Or just double-click `index.html`.
 
+## Deploying to Vercel
+
+The repo is a pure static site (`vercel.json` included, no build step):
+
+- **Dashboard**: [vercel.com/new](https://vercel.com/new) → Import this GitHub
+  repo → leave every setting on its default (no framework, no build command)
+  → Deploy. Vercel deploys the default branch to production and every other
+  branch as a preview.
+- **CLI**: `npx vercel` from the repo root (then `npx vercel --prod`).
+
 ## Data
 
 Prices are **simulated demo data** (a seeded random walk, deterministic across

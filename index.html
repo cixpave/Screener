@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulse — Market Screener</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%23D97757'/></svg>">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#F0EEE6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1F1E1D" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Pulse">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -64,7 +72,7 @@
         <select id="sector-filter" class="select" aria-label="Filter by sector">
           <option value="">All sectors</option>
         </select>
-        <input type="search" id="search" class="search" placeholder="Search ticker…" aria-label="Search ticker">
+        <input type="search" id="search" class="search" placeholder="Search any US ticker…" aria-label="Search any US ticker">
       </div>
     </div>
 
@@ -292,6 +300,7 @@
 <script src="js/indicators.js"></script>
 <script src="js/patterns.js"></script>
 <script src="js/universe.js"></script>
+<script src="js/uslistings.js"></script>
 <script src="js/data.js"></script>
 <script src="js/live.js"></script>
 <script src="js/app.js"></script>

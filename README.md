@@ -7,7 +7,16 @@ Fully responsive: works as well on a phone as on a desktop.
 
 ## Features
 
-- **Screener — the full S&P 500 (503 stocks)** with price, daily change,
+- **Every US-listed stock** — the S&P 500 is precomputed at load, and the
+  complete NASDAQ/NYSE/AMEX directory (~12,400 stocks and ETFs) is bundled:
+  type any ticker or company name in search and it loads into the screener
+  on the spot with all indicators and signals computed. Holdings can be any
+  US symbol too.
+- **Install on your phone (PWA)** — open the site in Safari (iPhone) or
+  Chrome (Android) → Share → **Add to Home Screen**. It installs like a
+  native app: its own icon, full-screen, opens instantly, and works offline
+  on demo data (live quotes resume when you're back online).
+- **Screener — the full S&P 500 (503 stocks)** precomputed, with price, daily change,
   **RSI (14)**, **MACD (12, 26, 9)** state, a composite **bull/bear bias
   score**, and a 30-day sparkline. Preset screens (RSI oversold/overbought,
   MACD crosses, uptrend, bullish/bearish bias), a **filter for any individual

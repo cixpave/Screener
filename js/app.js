@@ -67,7 +67,7 @@
   const state = { preset: 'all', sector: '', search: '', signal: '', sortKey: 'ticker', sortDir: 1, page: 1 };
 
   // populate sector filter + ticker datalist + signal filter
-  const sectors = [...new Set(MarketData.STOCKS.map(s => s.sector))].sort();
+  const sectors = [...new Set(MarketData.STOCKS.map(s => s.sector)), 'ETF', 'Other (US)'].sort();
   for (const sec of sectors) {
     const o = document.createElement('option');
     o.value = o.textContent = sec;
@@ -152,6 +152,8 @@
   };
 
   function filteredRows() {
+    // pull matching symbols from the full US directory into the screener
+    if (state.search) MarketData.searchDirectory(state.search).forEach(t => MarketData.ensureStock(t));
     let rows = MarketData.STOCKS.filter(PRESETS[state.preset]);
     if (state.sector) rows = rows.filter(s => s.sector === state.sector);
     if (state.signal) rows = rows.filter(s => s.sig.fired.some(f => f.id === state.signal));
@@ -185,7 +187,7 @@
 
     $('#screener-empty').hidden = rows.length > 0;
     $('#result-count').textContent = rows.length
-      ? `Showing ${shown.length} of ${rows.length} stocks (S&P 500)` : '';
+      ? `Showing ${shown.length} of ${rows.length} loaded · ${MarketData.DIRECTORY_COUNT.toLocaleString()} US symbols searchable` : '';
     $('#load-more').hidden = shown.length >= rows.length;
 
     $$('th[data-sort]').forEach(th => {
@@ -708,7 +710,7 @@
   function renderPortfolio() {
     let value = 0, cost = 0, dayChange = 0;
     const rows = holdings.map(h => {
-      const s = MarketData.BY_TICKER[h.t];
+      const s = MarketData.BY_TICKER[h.t] || MarketData.ensureStock(h.t);
       const price = s ? s.price : h.cost;
       const v = price * h.shares;
       value += v;
@@ -856,6 +858,7 @@
     const shares = parseFloat($('#add-shares').value);
     const cost = parseFloat($('#add-cost').value);
     if (!t || !(shares > 0) || !(cost > 0)) return;
+    MarketData.ensureStock(t); // any US-listed symbol works, not just the S&P 500
     const existing = holdings.find(h => h.t === t);
     if (existing) {
       // merge: weighted average cost
@@ -1003,4 +1006,9 @@
   renderLearn();
   renderConn();
   renderBanner();
+
+  // PWA: offline app-shell cache so "Add to Home Screen" works like a native app
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* offline install is optional */ });
+  }
 })();

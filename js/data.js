@@ -197,6 +197,59 @@ const MarketData = (() => {
   const STOCKS = UNIVERSE.map(spec => computeStock(spec, genSeries(spec)));
   const BY_TICKER = Object.fromEntries(STOCKS.map(s => [s.t, s]));
 
+  /* ---------- the rest of the US market, loaded on demand ---------- */
+
+  const LISTINGS_BY_T = Object.fromEntries(USListings.map(l => [l[0], l]));
+  const DIRECTORY_COUNT = USListings.length + UNIVERSE.length;
+
+  /* Load any US-listed symbol into the screener (S&P 500 is precomputed;
+     everything else computes on first request — a couple of ms). */
+  function ensureStock(t) {
+    t = (t || '').toUpperCase();
+    if (BY_TICKER[t]) return BY_TICKER[t];
+    const l = LISTINGS_BY_T[t];
+    if (!l) return null;
+    const h = hash(t);
+    const isEtf = !!l[2];
+    const spec = {
+      t, name: l[1] || t,
+      sector: isEtf ? 'ETF' : 'Other (US)',
+      px: +(8 * Math.pow(80, (h % 1000) / 1000)).toFixed(2),
+      vol: isEtf ? 0.007 + ((h >>> 10) % 100) / 100 * 0.010
+                 : 0.012 + ((h >>> 10) % 100) / 100 * 0.025,
+      drift: (((h >>> 3) % 100) / 100 - 0.45) * 0.0012,
+    };
+    const s = computeStock(spec, genSeries(spec));
+    s.onDemand = true;
+    STOCKS.push(s);
+    BY_TICKER[t] = s;
+    signalExamplesDirty = true;
+    return s;
+  }
+
+  /* Directory search for symbols not yet loaded: exact ticker and ticker
+     prefixes first, then company-name matches. */
+  function searchDirectory(q, limit = 10) {
+    q = (q || '').toUpperCase();
+    if (q.length < 1) return [];
+    const out = [];
+    for (const [sym] of USListings) {
+      if (!BY_TICKER[sym] && sym.startsWith(q)) {
+        out.push(sym);
+        if (out.length >= limit) return out;
+      }
+    }
+    if (q.length >= 3) {
+      for (const [sym, name] of USListings) {
+        if (!BY_TICKER[sym] && !out.includes(sym) && name.toUpperCase().includes(q)) {
+          out.push(sym);
+          if (out.length >= limit) break;
+        }
+      }
+    }
+    return out;
+  }
+
   /* Replace a stock's series with real candles (from a live provider) and
      recompute everything in place, so existing references stay valid. */
   function refreshFromCandles(t, series) {
@@ -330,7 +383,7 @@ const MarketData = (() => {
   };
 
   return {
-    STOCKS, BY_TICKER, DATES, EVENTS, TIPS, GLOSSARY, BARS,
-    signalExamples, refreshFromCandles, applyQuote,
+    STOCKS, BY_TICKER, DATES, EVENTS, TIPS, GLOSSARY, BARS, DIRECTORY_COUNT,
+    signalExamples, refreshFromCandles, applyQuote, ensureStock, searchDirectory,
   };
 })();

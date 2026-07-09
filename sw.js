@@ -2,7 +2,7 @@
    instantly and works offline (on demo data). Live API calls always go to
    the network. */
 
-const CACHE = 'pulse-v2';
+const CACHE = 'pulse-v3';
 const SHELL = [
   './',
   'css/styles.css',
@@ -12,6 +12,7 @@ const SHELL = [
   'js/uslistings.js',
   'js/data.js',
   'js/live.js',
+  'js/schwab.js',
   'js/app.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
@@ -33,8 +34,9 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  // never intercept live market-data or brokerage calls
+  // never intercept live market-data, brokerage, or serverless API calls
   if (url.origin !== location.origin || e.request.method !== 'GET') return;
+  if (url.pathname.includes('/api/')) return;
 
   // stale-while-revalidate: serve cache immediately, refresh it in the background
   e.respondWith(

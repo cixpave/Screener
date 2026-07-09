@@ -204,7 +204,7 @@
     });
 
     // live layer refreshes what the user is actually looking at first
-    LiveData.setPriority([...new Set([...holdings.map(h => h.t), ...shown.slice(0, 120).map(s => s.t)])]);
+    LiveData.setPriority([...new Set([...activeHoldings().map(h => h.t), ...shown.slice(0, 120).map(s => s.t)])]);
   }
 
   const resetPage = () => { state.page = 1; };
@@ -700,46 +700,61 @@
 
   /* ================= portfolio ================= */
 
-  const DEFAULT_HOLDINGS = [
-    { t: 'AAPL', shares: 10, cost: 205.0 },
-    { t: 'NVDA', shares: 12, cost: 118.4 },
-    { t: 'KO',   shares: 40, cost: 61.25 },
-    { t: 'UNH',  shares: 3,  cost: 545.0 },
-  ];
-
   function loadHoldings() {
     try {
       const raw = localStorage.getItem('pulse.holdings');
       if (raw) return JSON.parse(raw);
-    } catch (_) { /* fall through to defaults */ }
-    return DEFAULT_HOLDINGS.slice();
+    } catch (_) { /* corrupted — start empty */ }
+    return [];
   }
-  let holdings = loadHoldings();
+  let holdings = loadHoldings();          // manually-entered holdings
+  let schwabHoldings = null;              // real positions once logged in
+  const activeHoldings = () => schwabHoldings || holdings;
   const saveHoldings = () => localStorage.setItem('pulse.holdings', JSON.stringify(holdings));
 
+  /* Pull real positions from Schwab and re-render when they change. */
+  async function syncSchwab() {
+    if (!Schwab.connected()) { if (schwabHoldings) { schwabHoldings = null; renderPortfolio(); } return; }
+    const p = await Schwab.positions();
+    if (p) {
+      p.forEach(h => MarketData.ensureStock(h.t));
+      schwabHoldings = p;
+      renderPortfolio();
+      renderConn();
+    }
+  }
+  setInterval(syncSchwab, 60000);
+
   function renderPortfolio() {
+    const hs = activeHoldings();
+    const fromSchwab = !!schwabHoldings;
     let value = 0, cost = 0, dayChange = 0;
-    const rows = holdings.map(h => {
+    const rows = hs.map(h => {
       const s = MarketData.BY_TICKER[h.t] || MarketData.ensureStock(h.t);
-      const price = s ? s.price : h.cost;
-      const v = price * h.shares;
+      const price = s ? s.price : (h.marketValue && h.shares ? h.marketValue / h.shares : h.cost);
+      const v = s || !h.marketValue ? price * h.shares : h.marketValue;
       value += v;
       cost += h.cost * h.shares;
       if (s) dayChange += (s.price - s.closes[s.closes.length - 2]) * h.shares;
       const gain = v - h.cost * h.shares;
       const gainPct = h.cost > 0 ? (price / h.cost - 1) * 100 : 0;
       return `<tr>
-        <td class="sym"><a href="#" data-open="${h.t}" style="color:inherit;text-decoration:none">${h.t}</a>${s ? '' : ' <span class="tag">no data</span>'}</td>
+        <td class="sym"><a href="#" data-open="${h.t}" style="color:inherit;text-decoration:none">${h.t}</a>${s ? '' : ' <span class="tag">no chart</span>'}</td>
         <td class="num">${h.shares}</td>
         <td class="num">${fmtUsd(h.cost)}</td>
-        <td class="num">${s ? fmtUsd(price) : '—'}</td>
+        <td class="num">${fmtUsd(price)}</td>
         <td class="num">${fmtUsd(v)}</td>
         <td class="num ${gain >= 0 ? 'delta-up' : 'delta-down'}">${arrow(gain)} ${fmtUsd(Math.abs(gain))} (${fmtPct(Math.abs(gainPct), false)})</td>
-        <td><button class="remove-btn" data-remove="${h.t}" title="Remove ${h.t}" aria-label="Remove ${h.t}">✕</button></td>
+        <td>${fromSchwab ? '' : `<button class="remove-btn" data-remove="${h.t}" title="Remove ${h.t}" aria-label="Remove ${h.t}">✕</button>`}</td>
       </tr>`;
     });
     $('#holdings-body').innerHTML = rows.join('') ||
-      `<tr><td colspan="7" class="empty-note">No holdings yet — add one below to get suggestions.</td></tr>`;
+      `<tr><td colspan="7" class="empty-note">${fromSchwab ? 'No equity positions found in your Schwab account.' : 'No holdings yet — add one below, or log in with Schwab (Connect) to sync your real portfolio.'}</td></tr>`;
+
+    // Schwab-synced portfolios are read-only; manual entry hides
+    $('#add-holding-form').style.display = fromSchwab ? 'none' : '';
+    const sub = $('#view-portfolio .panel-sub');
+    if (sub) sub.textContent = fromSchwab ? 'synced from your Schwab account' : 'saved in this browser';
 
     const totalGain = value - cost;
     $('#portfolio-stats').innerHTML = `
@@ -759,7 +774,7 @@
     const cards = [];
     const today = new Date();
 
-    for (const h of holdings) {
+    for (const h of activeHoldings()) {
       const s = MarketData.BY_TICKER[h.t];
       if (!s) continue;
 
@@ -834,7 +849,7 @@
       const days = (new Date(ev.date + 'T12:00:00') - today) / 86400000;
       return ev.kind === 'fed' && days >= 0;
     });
-    if (fed && holdings.length) cards.push(card('Portfolio', 'Fed meeting ahead', '',
+    if (fed && activeHoldings().length) cards.push(card('Portfolio', 'Fed meeting ahead', '',
       `The next Fed meeting is ${new Date(fed.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}. Rate decisions affect nearly every stock — growth names most of all. No action needed; just don't be surprised by a choppy day.`,
       'The FOMC sets interest rates. Higher rates make future profits worth less today, which weighs hardest on high-growth stocks.'));
 
@@ -887,7 +902,7 @@
 
   function renderEvents() {
     const mineOnly = $('#events-mine-only').checked;
-    const mySet = new Set(holdings.map(h => h.t));
+    const mySet = new Set(activeHoldings().map(h => h.t));
     const today = new Date(); today.setHours(0, 0, 0, 0);
 
     const upcoming = MarketData.EVENTS
@@ -958,60 +973,77 @@
   /* ================= connect modal ================= */
 
   const modalScrim = $('#modal-scrim');
-  const connState = () => JSON.parse(localStorage.getItem('pulse.schwab') || '{}');
 
   function renderConn() {
-    const c = connState();
     const live = LiveData.status().live;
-    const on = !!c.authorized;
-    $('#conn-dot').classList.toggle('is-on', on || live);
-    $('#conn-label').textContent = on ? 'thinkorswim linked' : live ? 'Live data on' : 'Connect';
+    const schwabOn = Schwab.connected();
+    $('#conn-dot').classList.toggle('is-on', schwabOn || live);
+    $('#conn-label').textContent = schwabOn ? 'Schwab linked' : live ? 'Live data on' : 'Connect';
+    const st = $('#schwab-status');
+    if (st) st.textContent = schwabOn
+      ? '✓ Logged in — your portfolio tab shows your real Schwab positions.'
+      : Schwab.error() ? 'Last attempt failed: ' + Schwab.error() : 'Not connected.';
     renderBanner();
   }
 
+  /* Auto-fill API keys from the server using your saved sync code, so a new
+     device (or the installed iPhone app) goes live without retyping keys. */
+  async function autoConfig() {
+    const code = localStorage.getItem('pulse.synccode');
+    if (!code) return;
+    const lk = LiveData.getKeys();
+    if (lk.finnhub || lk.twelvedata) return; // already configured on this device
+    try {
+      const r = await fetch('api/config', { headers: { 'x-pulse-code': code } });
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j.finnhub || j.twelvedata) { LiveData.setKeys(j); renderConn(); }
+    } catch (_) { /* offline or not deployed with functions — demo continues */ }
+  }
+
   $('#connect-btn').addEventListener('click', () => {
-    const c = connState();
-    if (c.key) $('#schwab-key').value = c.key;
-    if (c.callback) $('#schwab-callback').value = c.callback;
     const lk = LiveData.getKeys();
     $('#finnhub-key').value = lk.finnhub || '';
     $('#twelvedata-key').value = lk.twelvedata || '';
+    $('#sync-code').value = localStorage.getItem('pulse.synccode') || '';
+    renderConn();
     modalScrim.hidden = false;
   });
   $('#modal-close').addEventListener('click', () => { modalScrim.hidden = true; });
   modalScrim.addEventListener('click', e => { if (e.target === modalScrim) modalScrim.hidden = true; });
 
-  $('#live-save').addEventListener('click', () => {
+  $('#live-save').addEventListener('click', async () => {
+    const code = $('#sync-code').value.trim();
+    if (code) localStorage.setItem('pulse.synccode', code);
     LiveData.setKeys({ finnhub: $('#finnhub-key').value, twelvedata: $('#twelvedata-key').value });
+    await autoConfig();
     renderConn();
     modalScrim.hidden = true;
   });
   $('#live-clear').addEventListener('click', () => {
     LiveData.setKeys({ finnhub: '', twelvedata: '' });
+    localStorage.removeItem('pulse.synccode');
     $('#finnhub-key').value = '';
     $('#twelvedata-key').value = '';
+    $('#sync-code').value = '';
     renderConn();
   });
 
-  $('#schwab-auth').addEventListener('click', () => {
-    const key = $('#schwab-key').value.trim();
-    const callback = $('#schwab-callback').value.trim();
-    if (!key) { $('#schwab-key').focus(); return; }
-    localStorage.setItem('pulse.schwab', JSON.stringify({ key, callback, authorized: true }));
-    const url = 'https://api.schwabapi.com/v1/oauth/authorize?client_id=' +
-      encodeURIComponent(key) + '&redirect_uri=' + encodeURIComponent(callback);
-    window.open(url, '_blank', 'noopener');
-    renderConn();
-    modalScrim.hidden = true;
-  });
+  $('#schwab-login').addEventListener('click', () => { location.href = 'api/schwab/login'; });
 
   $('#schwab-disconnect').addEventListener('click', () => {
-    localStorage.removeItem('pulse.schwab');
+    Schwab.disconnect();
+    schwabHoldings = null;
+    renderPortfolio();
     renderConn();
     modalScrim.hidden = true;
   });
 
   /* ================= boot ================= */
+
+  Schwab.absorbCallback();  // pick up tokens if we just came back from Schwab login
+  autoConfig();             // auto-fill saved API keys from the server
+  syncSchwab();             // pull real positions if logged in
 
   // reflect the restored screen settings in the controls
   $$('#presets .chip').forEach(c => c.classList.toggle('is-active', c.dataset.preset === state.preset));

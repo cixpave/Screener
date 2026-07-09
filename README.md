@@ -103,6 +103,26 @@ visits) so you can learn RSI and MACD risk-free. Every screen is labelled
 accordingly. FOMC dates are the Fed's published 2026 schedule; CPI/jobs and
 earnings dates are approximate.
 
+## Personal setup (auto-filled keys + real Schwab portfolio)
+
+Deployed on Vercel, the app includes serverless functions that make it *your*
+screener. Set these environment variables in the Vercel project
+(Settings → Environment Variables), then redeploy:
+
+| Variable | What it does |
+|---|---|
+| `PULSE_CODE` | A short code you choose. Enter it once per device (Connect → Sync code) and your API keys auto-fill — no retyping. |
+| `FINNHUB_KEY` | Your Finnhub key (live quotes). |
+| `TWELVEDATA_KEY` | Your Twelve Data key (real daily candles). |
+| `SCHWAB_APP_KEY` / `SCHWAB_SECRET` | Your Schwab developer app credentials — enables "Log in with Schwab". |
+
+With Schwab configured, **Connect → Log in with Schwab** runs the official
+OAuth flow (password only ever typed on schwab.com; the app secret stays
+server-side) and the Portfolio tab shows your real positions, refreshed
+every minute. Schwab setup: create an app at developer.schwab.com with the
+*Accounts & Trading* + *Market Data* products and callback URL
+`https://<your-domain>/api/schwab/callback`.
+
 ## Connecting thinkorswim (Charles Schwab)
 
 thinkorswim is part of Charles Schwab, and live data comes through the

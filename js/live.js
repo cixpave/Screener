@@ -14,7 +14,9 @@
 const LiveData = (() => {
   const LS_KEYS = 'pulse.livekeys';
   const LS_HIST = 'pulse.hist';
+  const LS_QUOTES = 'pulse.quotes';
   const HIST_CACHE_MAX = 12;
+  const QUOTE_SNAPSHOT_MAX_AGE = 7 * 86400000; // restore quotes up to a week old
 
   let keys = { finnhub: '', twelvedata: '' };
   try { keys = { ...keys, ...JSON.parse(localStorage.getItem(LS_KEYS) || '{}') }; } catch (_) {}
@@ -26,8 +28,46 @@ const LiveData = (() => {
   let backoffUntil = 0;
   let updatedCount = 0;
   let lastAt = null;
+  let restoredCount = 0;
+  let restoredAt = null;
+  let snapshotDirty = false;
   const freshness = new Map(); // ticker -> last quote timestamp
   const histMem = new Map();
+
+  /* ---------- automatic save & restore of market data ---------- */
+
+  /* Snapshot every live price to this device (throttled), so the next visit
+     opens with your last-known real prices instead of resetting to demo. */
+  function saveSnapshot() {
+    if (!snapshotDirty) return;
+    snapshotDirty = false;
+    try {
+      const snap = JSON.parse(localStorage.getItem(LS_QUOTES) || '{}');
+      for (const [t, ts] of freshness) {
+        const s = MarketData.BY_TICKER[t];
+        if (s && s.liveQuote && !s.restoredQuote) snap[t] = [s.price, +s.chg.toFixed(3), ts];
+      }
+      localStorage.setItem(LS_QUOTES, JSON.stringify(snap));
+    } catch (_) { /* storage full — snapshot is a convenience, not critical */ }
+  }
+  setInterval(saveSnapshot, 20000);
+  addEventListener('pagehide', saveSnapshot);
+
+  function restoreSnapshot() {
+    try {
+      const snap = JSON.parse(localStorage.getItem(LS_QUOTES) || '{}');
+      const now = Date.now();
+      for (const [t, v] of Object.entries(snap)) {
+        const [price, chg, ts] = v;
+        if (now - ts > QUOTE_SNAPSHOT_MAX_AGE) { delete snap[t]; continue; }
+        if (!MarketData.BY_TICKER[t]) MarketData.ensureStock(t);
+        if (MarketData.applyQuoteLight(t, price, chg, ts)) {
+          restoredCount++;
+          if (!restoredAt || ts > restoredAt) restoredAt = ts;
+        }
+      }
+    } catch (_) { /* corrupted snapshot — start fresh */ }
+  }
 
   const hasQuotes = () => !!(keys.finnhub || keys.twelvedata);
   const hasHistory = () => !!keys.twelvedata;
@@ -79,6 +119,7 @@ const LiveData = (() => {
         MarketData.applyQuote(t, price, prevClose);
         updatedCount = freshness.size;
         lastAt = Date.now();
+        snapshotDirty = true;
         onUpdate(t);
       }
     } catch (_) { /* network hiccup — next tick tries another symbol */ }
@@ -153,12 +194,14 @@ const LiveData = (() => {
       history: hasHistory(),
       provider: keys.finnhub ? 'Finnhub' : keys.twelvedata ? 'Twelve Data' : null,
       updatedCount, lastAt,
+      restoredCount, restoredAt,
       backoff: Date.now() < backoffUntil,
     };
   }
 
   function init(opts) {
     onUpdate = opts.onUpdate || onUpdate;
+    restoreSnapshot();
     restart();
   }
 

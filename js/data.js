@@ -261,6 +261,24 @@ const MarketData = (() => {
     return s;
   }
 
+  /* Cheap variant for restoring saved quotes at boot: updates the shown
+     price without the full indicator recompute (the next live poll of the
+     symbol does the honest recompute). */
+  function applyQuoteLight(t, price, chg, at) {
+    const s = BY_TICKER[t];
+    if (!s || !(price > 0)) return null;
+    const n = s.closes.length;
+    s.closes[n - 1] = price;
+    s.highs[n - 1] = Math.max(s.highs[n - 1], price);
+    s.lows[n - 1] = Math.min(s.lows[n - 1], price);
+    s.price = price;
+    if (chg != null) s.chg = chg;
+    s.liveQuote = true;
+    s.restoredQuote = true;
+    s.quotedAt = at || Date.now();
+    return s;
+  }
+
   /* Apply a live quote: update today's bar with the real price and
      recompute the stock so signals stay honest with the new close. */
   function applyQuote(t, price, prevClose) {
@@ -277,6 +295,7 @@ const MarketData = (() => {
     if (prevClose > 0 && !s.liveHistory) series.closes[n - 2] = prevClose;
     const fresh = computeStock({ t: s.t, name: s.name, sector: s.sector, px: s.px, vol: s.vol, drift: s.drift }, series);
     Object.assign(s, fresh, { liveHistory: s.liveHistory, liveQuote: true, quotedAt: Date.now() });
+    s.restoredQuote = false;
     if (prevClose > 0) s.chg = (price / prevClose - 1) * 100;
     signalExamplesDirty = true;
     return s;
@@ -384,6 +403,6 @@ const MarketData = (() => {
 
   return {
     STOCKS, BY_TICKER, DATES, EVENTS, TIPS, GLOSSARY, BARS, DIRECTORY_COUNT,
-    signalExamples, refreshFromCandles, applyQuote, ensureStock, searchDirectory,
+    signalExamples, refreshFromCandles, applyQuote, applyQuoteLight, ensureStock, searchDirectory,
   };
 })();

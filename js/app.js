@@ -65,6 +65,14 @@
 
   const PAGE_SIZE = 60;
   const state = { preset: 'all', sector: '', search: '', signal: '', sortKey: 'ticker', sortDir: 1, page: 1 };
+  // your screen settings come back the way you left them
+  try {
+    const saved = JSON.parse(localStorage.getItem('pulse.screen') || '{}');
+    for (const k of ['preset', 'sector', 'signal', 'sortKey', 'sortDir'])
+      if (saved[k] !== undefined) state[k] = saved[k];
+  } catch (_) {}
+  const saveScreenState = () => localStorage.setItem('pulse.screen', JSON.stringify(
+    { preset: state.preset, sector: state.sector, signal: state.signal, sortKey: state.sortKey, sortDir: state.sortDir }));
 
   // populate sector filter + ticker datalist + signal filter
   const sectors = [...new Set(MarketData.STOCKS.map(s => s.sector)), 'ETF', 'Other (US)'].sort();
@@ -209,10 +217,11 @@
     state.preset = chip.dataset.preset;
     resetPage();
     $$('#presets .chip').forEach(c => c.classList.toggle('is-active', c === chip));
+    saveScreenState();
     renderScreener();
   });
-  $('#sector-filter').addEventListener('change', e => { state.sector = e.target.value; resetPage(); renderScreener(); });
-  $('#signal-filter').addEventListener('change', e => { state.signal = e.target.value; resetPage(); renderScreener(); });
+  $('#sector-filter').addEventListener('change', e => { state.sector = e.target.value; resetPage(); saveScreenState(); renderScreener(); });
+  $('#signal-filter').addEventListener('change', e => { state.signal = e.target.value; resetPage(); saveScreenState(); renderScreener(); });
   $('#search').addEventListener('input', e => { state.search = e.target.value.trim(); resetPage(); renderScreener(); });
   $('#screener-table thead').addEventListener('click', e => {
     const th = e.target.closest('th[data-sort]');
@@ -220,6 +229,7 @@
     if (state.sortKey === th.dataset.sort) state.sortDir *= -1;
     else { state.sortKey = th.dataset.sort; state.sortDir = 1; }
     resetPage();
+    saveScreenState();
     renderScreener();
   });
   $('#screener-body').addEventListener('click', e => {
@@ -915,7 +925,9 @@
     const st = LiveData.status();
     const el = $('#data-banner');
     if (!st.live) {
-      el.textContent = 'Demo data — prices are simulated for learning. Open "Connect" to add a free API key for live S&P 500 quotes, or link thinkorswim.';
+      el.textContent = st.restoredCount
+        ? `Saved data — ${st.restoredCount} prices restored from your last session (as of ${new Date(st.restoredAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}). Add a key in "Connect" to go live again.`
+        : 'Demo data — prices are simulated for learning. Open "Connect" to add a free API key for live S&P 500 quotes, or link thinkorswim.';
       return;
     }
     const age = st.lastAt ? Math.max(0, Math.round((Date.now() - st.lastAt) / 1000)) : null;
@@ -1000,6 +1012,11 @@
   });
 
   /* ================= boot ================= */
+
+  // reflect the restored screen settings in the controls
+  $$('#presets .chip').forEach(c => c.classList.toggle('is-active', c.dataset.preset === state.preset));
+  $('#sector-filter').value = state.sector;
+  $('#signal-filter').value = state.signal;
 
   renderScreener();
   renderPortfolio();

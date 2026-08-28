@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulse — Market Screener</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='42' fill='%23D97757'/></svg>">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#F0EEE6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1F1E1D" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Pulse">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -64,7 +72,7 @@
         <select id="sector-filter" class="select" aria-label="Filter by sector">
           <option value="">All sectors</option>
         </select>
-        <input type="search" id="search" class="search" placeholder="Search ticker…" aria-label="Search ticker">
+        <input type="search" id="search" class="search" placeholder="Search any US ticker…" aria-label="Search any US ticker">
       </div>
     </div>
 
@@ -256,32 +264,24 @@
         <span>Twelve Data API key <em>(twelvedata.com — adds real daily candles &amp; patterns)</em></span>
         <input type="text" id="twelvedata-key" placeholder="paste your free key" autocomplete="off">
       </label>
+      <label class="field">
+        <span>Sync code <em>(auto-fills your keys on any device — set PULSE_CODE + key env vars in Vercel once)</em></span>
+        <input type="password" id="sync-code" placeholder="your sync code" autocomplete="off">
+      </label>
       <div class="modal-actions">
         <button class="btn btn-primary" id="live-save">Save &amp; go live</button>
-        <button class="btn btn-ghost" id="live-clear">Use demo data</button>
+        <button class="btn btn-ghost" id="live-clear">Clear keys</button>
       </div>
       <p class="fine-print">Free tiers are rate-limited (Finnhub ~60 quotes/min), so Pulse refreshes what's on your screen and what you hold first, then cycles the rest of the index continuously.</p>
 
-      <h3 class="modal-section">Brokerage — thinkorswim</h3>
-      <p>thinkorswim is part of <strong>Charles Schwab</strong>. Live data comes through the Schwab Trader API using OAuth — your password is never entered here.</p>
-      <ol class="steps">
-        <li>Create a (free) app at <strong>developer.schwab.com</strong> and request the <em>Market Data</em> product.</li>
-        <li>Set your app's callback URL to the value below.</li>
-        <li>Paste your <strong>App Key</strong> here and click <em>Authorize with Schwab</em>.</li>
-      </ol>
-      <label class="field">
-        <span>App Key (client id)</span>
-        <input type="text" id="schwab-key" placeholder="e.g. Xr2…" autocomplete="off">
-      </label>
-      <label class="field">
-        <span>Callback URL</span>
-        <input type="text" id="schwab-callback" value="https://127.0.0.1:8443/callback" autocomplete="off">
-      </label>
+      <h3 class="modal-section">Brokerage — thinkorswim (Schwab)</h3>
+      <p>Log in with your <strong>Schwab</strong> account and your portfolio tab shows your real positions. Your password is typed only on schwab.com; access tokens stay in this browser and the app secret stays on the server.</p>
+      <p class="fine-print" id="schwab-status"></p>
       <div class="modal-actions">
-        <button class="btn btn-primary" id="schwab-auth">Authorize with Schwab</button>
+        <button class="btn btn-primary" id="schwab-login">Log in with Schwab</button>
         <button class="btn btn-ghost" id="schwab-disconnect">Disconnect</button>
       </div>
-      <p class="fine-print">Note: completing the token exchange requires a small local proxy (the Schwab API does not allow direct browser calls). Until then, Pulse runs on clearly-labelled demo data so you can learn the tools risk-free. Your App Key is stored only in this browser.</p>
+      <p class="fine-print">One-time setup: create an app at <strong>developer.schwab.com</strong> (Accounts &amp; Trading + Market Data products), set its callback URL to <code>https://&lt;your-domain&gt;/api/schwab/callback</code>, then add <code>SCHWAB_APP_KEY</code> and <code>SCHWAB_SECRET</code> as environment variables in your Vercel project.</p>
     </div>
   </div>
 </div>
@@ -292,8 +292,10 @@
 <script src="js/indicators.js"></script>
 <script src="js/patterns.js"></script>
 <script src="js/universe.js"></script>
+<script src="js/uslistings.js"></script>
 <script src="js/data.js"></script>
 <script src="js/live.js"></script>
+<script src="js/schwab.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

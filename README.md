@@ -7,7 +7,16 @@ Fully responsive: works as well on a phone as on a desktop.
 
 ## Features
 
-- **Screener — the full S&P 500 (503 stocks)** with price, daily change,
+- **Every US-listed stock** — the S&P 500 is precomputed at load, and the
+  complete NASDAQ/NYSE/AMEX directory (~12,400 stocks and ETFs) is bundled:
+  type any ticker or company name in search and it loads into the screener
+  on the spot with all indicators and signals computed. Holdings can be any
+  US symbol too.
+- **Install on your phone (PWA)** — open the site in Safari (iPhone) or
+  Chrome (Android) → Share → **Add to Home Screen**. It installs like a
+  native app: its own icon, full-screen, opens instantly, and works offline
+  on demo data (live quotes resume when you're back online).
+- **Screener — the full S&P 500 (503 stocks)** precomputed, with price, daily change,
   **RSI (14)**, **MACD (12, 26, 9)** state, a composite **bull/bear bias
   score**, and a 30-day sparkline. Preset screens (RSI oversold/overbought,
   MACD crosses, uptrend, bullish/bearish bias), a **filter for any individual
@@ -93,6 +102,26 @@ Prices are **simulated demo data** (a seeded random walk, deterministic across
 visits) so you can learn RSI and MACD risk-free. Every screen is labelled
 accordingly. FOMC dates are the Fed's published 2026 schedule; CPI/jobs and
 earnings dates are approximate.
+
+## Personal setup (auto-filled keys + real Schwab portfolio)
+
+Deployed on Vercel, the app includes serverless functions that make it *your*
+screener. Set these environment variables in the Vercel project
+(Settings → Environment Variables), then redeploy:
+
+| Variable | What it does |
+|---|---|
+| `PULSE_CODE` | A short code you choose. Enter it once per device (Connect → Sync code) and your API keys auto-fill — no retyping. |
+| `FINNHUB_KEY` | Your Finnhub key (live quotes). |
+| `TWELVEDATA_KEY` | Your Twelve Data key (real daily candles). |
+| `SCHWAB_APP_KEY` / `SCHWAB_SECRET` | Your Schwab developer app credentials — enables "Log in with Schwab". |
+
+With Schwab configured, **Connect → Log in with Schwab** runs the official
+OAuth flow (password only ever typed on schwab.com; the app secret stays
+server-side) and the Portfolio tab shows your real positions, refreshed
+every minute. Schwab setup: create an app at developer.schwab.com with the
+*Accounts & Trading* + *Market Data* products and callback URL
+`https://<your-domain>/api/schwab/callback`.
 
 ## Connecting thinkorswim (Charles Schwab)
 

@@ -115,6 +115,7 @@ screener. Set these environment variables in the Vercel project
 | `FINNHUB_KEY` | Your Finnhub key (live quotes). |
 | `TWELVEDATA_KEY` | Your Twelve Data key (real daily candles). |
 | `SCHWAB_APP_KEY` / `SCHWAB_SECRET` | Your Schwab developer app credentials — enables "Log in with Schwab". |
+| `SCHWAB_REDIRECT_URI` | Optional. Pins the OAuth `redirect_uri` to one canonical URL (`https://screener-nine-beta.vercel.app/api/schwab/callback`) instead of deriving it from whichever domain served the request. Set this if you ever open the app on a preview or alternate Vercel domain. |
 
 With Schwab configured, **Connect → Log in with Schwab** runs the official
 OAuth flow (password only ever typed on schwab.com; the app secret stays

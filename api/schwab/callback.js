@@ -3,7 +3,9 @@
    then hands the tokens to the app in the URL fragment (fragments are not
    sent to servers or logged).
 
-   Vercel env vars used: SCHWAB_APP_KEY, SCHWAB_SECRET. */
+   Vercel env vars used: SCHWAB_APP_KEY, SCHWAB_SECRET, and optionally
+   SCHWAB_REDIRECT_URI. The redirect_uri sent here must match the one used to
+   start the flow in login.js, so both resolve it the same way. */
 
 export default async function handler(req, res) {
   const appKey = process.env.SCHWAB_APP_KEY;
@@ -13,7 +15,8 @@ export default async function handler(req, res) {
   if (!appKey || !secret || !code) { res.status(400).send('Missing configuration or code.'); return; }
 
   const host = req.headers['x-forwarded-host'] || req.headers.host;
-  const redirectUri = `https://${host}/api/schwab/callback`;
+  const redirectUri = process.env.SCHWAB_REDIRECT_URI ||
+    `https://${host}/api/schwab/callback`;
 
   try {
     const r = await fetch('https://api.schwabapi.com/v1/oauth/token', {

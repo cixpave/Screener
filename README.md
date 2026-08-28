@@ -129,16 +129,22 @@ thinkorswim is part of Charles Schwab, and live data comes through the
 [Schwab Trader API](https://developer.schwab.com) via OAuth:
 
 1. Create a free developer account at **developer.schwab.com** and register an
-   app with the *Market Data Production* product.
-2. In Pulse, click **Connect thinkorswim**, paste your **App Key**, set the
-   callback URL to match your app registration, and click **Authorize with
-   Schwab** — this opens Schwab's official login page (your password is never
-   entered in Pulse).
-3. The Schwab API does not allow direct browser calls (CORS), so completing
-   the token exchange and streaming quotes requires a small local proxy —
-   a few lines of Node/Python that swap the OAuth `code` for tokens and relay
-   `GET /marketdata/v1/quotes`. Until that's in place, Pulse clearly labels
-   everything as demo data.
+   app with the *Accounts and Trading Production* and *Market Data Production*
+   products. Wait for it to reach status **Ready For Use**.
+2. Set the app's **Callback URL** to exactly
+   `https://<your-domain>/api/schwab/callback` — for this deployment that is
+   `https://screener-nine-beta.vercel.app/api/schwab/callback`. Schwab matches
+   it as an exact string, so it must equal what `api/schwab/login.js` builds
+   from the request host.
+3. Reveal the app's **Client ID** and **Client Secret** and set them in Vercel
+   as `SCHWAB_APP_KEY` and `SCHWAB_SECRET` (see the table above), then
+   redeploy so the functions pick them up.
+4. In Pulse, click **Connect → Log in with Schwab**. The token exchange runs
+   server-side in `api/schwab/callback.js`, so no local proxy is needed and
+   the secret never reaches the browser.
+
+Until `SCHWAB_APP_KEY` and `SCHWAB_SECRET` are set, `/api/schwab/login`
+answers **501 Not configured** and Pulse stays on clearly-labelled demo data.
 
 ## Disclaimer
 
